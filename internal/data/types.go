@@ -56,6 +56,7 @@ type TokenUsage struct {
 type SessionStats struct {
 	TotalInputTokens  int
 	TotalOutputTokens int
+	CacheWriteTokens  int
 	CacheReadTokens   int
 	EstimatedCostUSD  float64
 	MessageCount      int

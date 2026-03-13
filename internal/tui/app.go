@@ -1021,12 +1021,15 @@ func (m Model) renderDetail(width, height int) string {
 
 		// Token stats
 		sb.WriteString(toolLabelStyle.Render("  Tokens") + "\n")
-		sb.WriteString(fmt.Sprintf("    Input:    %s\n", formatTokens(s.TotalInputTokens)))
-		sb.WriteString(fmt.Sprintf("    Output:   %s\n", formatTokens(s.TotalOutputTokens)))
-		if s.CacheReadTokens > 0 {
-			sb.WriteString(fmt.Sprintf("    Cached:   %s\n", formatTokens(s.CacheReadTokens)))
+		sb.WriteString(fmt.Sprintf("    Input:      %s\n", formatTokens(s.TotalInputTokens)))
+		sb.WriteString(fmt.Sprintf("    Output:     %s\n", formatTokens(s.TotalOutputTokens)))
+		if s.CacheWriteTokens > 0 {
+			sb.WriteString(fmt.Sprintf("    Cache Write:%s\n", formatTokens(s.CacheWriteTokens)))
 		}
-		sb.WriteString(fmt.Sprintf("    Total:    %s\n", formatTokens(s.TotalInputTokens+s.TotalOutputTokens)))
+		if s.CacheReadTokens > 0 {
+			sb.WriteString(fmt.Sprintf("    Cache Read: %s\n", formatTokens(s.CacheReadTokens)))
+		}
+		sb.WriteString(fmt.Sprintf("    Total:      %s\n", formatTokens(s.TotalInputTokens+s.TotalOutputTokens)))
 
 		sb.WriteString("\n")
 

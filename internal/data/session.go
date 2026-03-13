@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -208,6 +207,7 @@ func ComputeStats(messages []SessionMessage) SessionStats {
 		if msg.Type == "assistant" {
 			stats.TotalInputTokens += msg.Usage.InputTokens
 			stats.TotalOutputTokens += msg.Usage.OutputTokens
+			stats.CacheWriteTokens += msg.Usage.CacheCreationTokens
 			stats.CacheReadTokens += msg.Usage.CacheReadTokens
 
 			if msg.Model != "" {
@@ -231,18 +231,14 @@ func ComputeStats(messages []SessionMessage) SessionStats {
 		stats.Duration = lastTime.Sub(firstTime)
 	}
 
-	// Cost estimation (approximate rates per 1M tokens)
-	// Sonnet: $3 input, $15 output; Opus: $15 input, $75 output
-	inputRate := 3.0 / 1_000_000
-	outputRate := 15.0 / 1_000_000
-	for _, model := range stats.Models {
-		if strings.Contains(model, "opus") {
-			inputRate = 15.0 / 1_000_000
-			outputRate = 75.0 / 1_000_000
-			break
-		}
+	// Cost estimation using accurate per-model pricing
+	model := ""
+	if len(stats.Models) > 0 {
+		model = stats.Models[0]
 	}
-	stats.EstimatedCostUSD = float64(stats.TotalInputTokens)*inputRate + float64(stats.TotalOutputTokens)*outputRate
+	stats.EstimatedCostUSD = ComputeCost(
+		stats.TotalInputTokens, stats.TotalOutputTokens,
+		stats.CacheWriteTokens, stats.CacheReadTokens, model)
 
 	stats.ComputeEnergy()
 

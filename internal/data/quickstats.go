@@ -69,6 +69,7 @@ func QuickScanStats(path string) (SessionStats, error) {
 		stats.MessageCount++
 		stats.TotalInputTokens += ql.Message.Usage.InputTokens
 		stats.TotalOutputTokens += ql.Message.Usage.OutputTokens
+		stats.CacheWriteTokens += ql.Message.Usage.CacheCreationTokens
 		stats.CacheReadTokens += ql.Message.Usage.CacheReadTokens
 
 		if ql.Message.Model != "" {
@@ -80,17 +81,14 @@ func QuickScanStats(path string) (SessionStats, error) {
 		stats.Models = append(stats.Models, model)
 	}
 
-	// Cost estimation
-	inputRate := 3.0 / 1_000_000
-	outputRate := 15.0 / 1_000_000
-	for _, model := range stats.Models {
-		if strings.Contains(model, "opus") {
-			inputRate = 15.0 / 1_000_000
-			outputRate = 75.0 / 1_000_000
-			break
-		}
+	// Cost estimation using accurate per-model pricing
+	model := ""
+	if len(stats.Models) > 0 {
+		model = stats.Models[0]
 	}
-	stats.EstimatedCostUSD = float64(stats.TotalInputTokens)*inputRate + float64(stats.TotalOutputTokens)*outputRate
+	stats.EstimatedCostUSD = ComputeCost(
+		stats.TotalInputTokens, stats.TotalOutputTokens,
+		stats.CacheWriteTokens, stats.CacheReadTokens, model)
 
 	// Energy metrics
 	stats.ComputeEnergy()
