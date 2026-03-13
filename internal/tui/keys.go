@@ -21,8 +21,9 @@ type keyMap struct {
 	PageUp   key.Binding
 	PageDown key.Binding
 	Refresh  key.Binding
-	Logs     key.Binding
-	Flag     key.Binding
+	Logs      key.Binding
+	Flag      key.Binding
+	Dashboard key.Binding
 }
 
 var keys = keyMap{
@@ -45,5 +46,6 @@ var keys = keyMap{
 	PageDown: key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdown", "page down")),
 	Refresh:  key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "refresh")),
 	Logs:     key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "view logs")),
-	Flag:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "flag/monitor")),
+	Flag:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "flag/monitor")),
+	Dashboard: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "dashboard")),
 }

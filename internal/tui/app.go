@@ -28,6 +28,7 @@ type view int
 const (
 	viewMain view = iota
 	viewHelp
+	viewDashboard
 )
 
 // listItem is a row in the 3-level tree: project / session / subagent
@@ -99,6 +100,11 @@ type Model struct {
 	flaggedSessions map[string]bool      // sessionID -> true
 	flaggedStats    map[string]data.SessionStats // sessionID -> latest stats
 
+	// Dashboard
+	dashboardData    *data.DashboardData
+	dashboardLoading bool
+	dashboardScroll  int
+
 	// Resume
 	ResumeSessionID string
 
@@ -115,6 +121,10 @@ type TranscriptLoadedMsg struct {
 	Messages []data.SessionMessage
 	Stats    data.SessionStats
 	Path     string
+}
+
+type DashboardLoadedMsg struct {
+	Data data.DashboardData
 }
 
 type FlaggedRefreshMsg struct {
@@ -255,6 +265,27 @@ func scheduleNextFlaggedRefresh() tea.Cmd {
 
 type flaggedTickMsg struct{}
 
+// loadDashboardCmd scans all sessions for quick stats and builds the dashboard
+func loadDashboardCmd(claudeDir string, groups []data.ProjectGroup) tea.Cmd {
+	return func() tea.Msg {
+		statsMap := make(map[string]data.SessionStats)
+		for _, g := range groups {
+			for _, s := range g.Sessions {
+				path := data.FindSessionFile(claudeDir, s.Project, s.SessionID)
+				if path == "" {
+					continue
+				}
+				stats, err := data.QuickScanStats(path)
+				if err == nil {
+					statsMap[s.SessionID] = stats
+				}
+			}
+		}
+		d := data.BuildDashboard(groups, statsMap)
+		return DashboardLoadedMsg{Data: d}
+	}
+}
+
 // loadQuickStatsCmd loads just token counts (fast, no message parsing)
 func loadQuickStatsCmd(claudeDir, project, sessionID string) tea.Cmd {
 	return func() tea.Msg {
@@ -376,6 +407,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case DashboardLoadedMsg:
+		m.dashboardLoading = false
+		d := msg.Data
+		m.dashboardData = &d
+		return m, nil
+
 	case FlaggedRefreshMsg:
 		// Update cached stats for flagged sessions
 		for sid, stats := range msg.Stats {
@@ -447,12 +484,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if m.currentView == viewDashboard {
+			switch {
+			case msg.String() == "esc" || msg.String() == "d" || msg.String() == "q":
+				m.currentView = viewMain
+			case key.Matches(msg, keys.Up):
+				if m.dashboardScroll > 0 {
+					m.dashboardScroll--
+				}
+			case key.Matches(msg, keys.Down):
+				m.dashboardScroll++
+			case key.Matches(msg, keys.PageUp):
+				m.dashboardScroll -= 20
+				if m.dashboardScroll < 0 {
+					m.dashboardScroll = 0
+				}
+			case key.Matches(msg, keys.PageDown):
+				m.dashboardScroll += 20
+			}
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
 
 		case key.Matches(msg, keys.Help):
 			m.currentView = viewHelp
+			return m, nil
+
+		case key.Matches(msg, keys.Dashboard):
+			m.currentView = viewDashboard
+			m.dashboardScroll = 0
+			if m.dashboardData == nil {
+				m.dashboardLoading = true
+				return m, loadDashboardCmd(m.claudeDir, m.groups)
+			}
 			return m, nil
 
 		case key.Matches(msg, keys.Search):
@@ -801,6 +868,8 @@ func (m Model) View() string {
 	switch m.currentView {
 	case viewHelp:
 		return m.renderHelp()
+	case viewDashboard:
+		return m.renderDashboard()
 	default:
 		return m.renderMain()
 	}
@@ -1126,6 +1195,7 @@ func (m Model) renderStatusBar() string {
 		{"↑↓←→", "Navigate"},
 		{"l", "Logs"},
 		{"f", "Flag"},
+		{"d", "Dash"},
 		{"/", "Search"},
 		{"c", "Copy"},
 		{"r", "Resume"},
@@ -1173,6 +1243,7 @@ func (m Model) renderHelp() string {
 		{"r", "Resume session (launches claude --resume)"},
 		{"t", "Toggle thinking block visibility"},
 		{"p", "Toggle privacy mode (secret redaction)"},
+		{"d", "Usage dashboard (all sessions aggregated)"},
 		{"Ctrl+R", "Force refresh (preserves UI state)"},
 		{"PgUp/PgDn", "Scroll transcript by page"},
 		{"?", "Toggle this help screen"},
@@ -1187,6 +1258,90 @@ func (m Model) renderHelp() string {
 	sb.WriteString("\n")
 	sb.WriteString(mutedStyle.Render("  Press ? or Esc to close"))
 	return sb.String()
+}
+
+func (m Model) renderDashboard() string {
+	if m.dashboardLoading {
+		return titleStyle.Render("  Dashboard") + "\n\n" + mutedStyle.Render("  Scanning all sessions...")
+	}
+
+	if m.dashboardData == nil {
+		return titleStyle.Render("  Dashboard") + "\n\n" + mutedStyle.Render("  No data")
+	}
+
+	d := m.dashboardData
+	var sb strings.Builder
+
+	sb.WriteString(titleStyle.Render("  Dashboard — All Sessions"))
+	sb.WriteString("\n\n")
+
+	// Summary
+	sb.WriteString(headerStyle.Width(m.width - 4).Render("  Summary"))
+	sb.WriteString("\n\n")
+	sb.WriteString(fmt.Sprintf("    Sessions:   %d\n", d.TotalSessions))
+	sb.WriteString(fmt.Sprintf("    Tokens:     %s\n", formatTokens(d.TotalTokens)))
+	sb.WriteString(fmt.Sprintf("    Cost:       $%.2f\n", d.TotalCost))
+	sb.WriteString(fmt.Sprintf("    Energy:     %.4f kWh\n", d.TotalEnergyKWh))
+	sb.WriteString(fmt.Sprintf("    CO2:        %.1f g\n", d.TotalCO2g))
+	sb.WriteString(fmt.Sprintf("    Tree-days:  %.1f\n", d.TotalTreeDays))
+	sb.WriteString("\n")
+
+	// By Project
+	sb.WriteString(headerStyle.Width(m.width - 4).Render("  By Project"))
+	sb.WriteString("\n\n")
+	sb.WriteString(assistantLabelStyle.Render(fmt.Sprintf("    %-30s %8s %10s %10s %8s", "Project", "Sessions", "Tokens", "Cost", "CO2")))
+	sb.WriteString("\n")
+	for _, p := range d.ByProject {
+		project := p.Project
+		if len(project) > 30 {
+			project = "..." + project[len(project)-27:]
+		}
+		sb.WriteString(fmt.Sprintf("    %-30s %8d %10s %9s %7.0fg\n",
+			project, p.Sessions, formatTokens(p.Tokens),
+			fmt.Sprintf("$%.2f", p.Cost), p.CO2g))
+	}
+	sb.WriteString("\n")
+
+	// By Model
+	sb.WriteString(headerStyle.Width(m.width - 4).Render("  By Model"))
+	sb.WriteString("\n\n")
+	sb.WriteString(assistantLabelStyle.Render(fmt.Sprintf("    %-28s %8s %10s %10s", "Model", "Sessions", "Tokens", "Cost")))
+	sb.WriteString("\n")
+	for _, ms := range d.ByModel {
+		sb.WriteString(fmt.Sprintf("    %-28s %8d %10s %9s\n",
+			ms.Model, ms.Sessions, formatTokens(ms.Tokens),
+			fmt.Sprintf("$%.2f", ms.Cost)))
+	}
+	sb.WriteString("\n")
+
+	// Top expensive sessions
+	sb.WriteString(headerStyle.Width(m.width - 4).Render("  Top Sessions by Cost"))
+	sb.WriteString("\n\n")
+	for i, s := range d.TopCost {
+		sb.WriteString(fmt.Sprintf("    %d. $%.2f  %s  %s\n",
+			i+1, s.Cost, formatTokens(s.Tokens), s.Display))
+		sb.WriteString(mutedStyle.Render(fmt.Sprintf("       %s  %s", s.Model, truncate(s.SessionID, 36))))
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
+	sb.WriteString(mutedStyle.Render("  Press d or Esc to close  ↑↓ to scroll"))
+
+	// Apply scroll
+	lines := strings.Split(sb.String(), "\n")
+	height := m.height - 1
+	maxScroll := len(lines) - height
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	scroll := m.dashboardScroll
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+	end := scroll + height
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return strings.Join(lines[scroll:end], "\n")
 }
 
 // Utilities
