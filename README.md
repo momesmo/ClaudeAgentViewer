@@ -9,7 +9,7 @@ A blazing-fast terminal UI for browsing, searching, and monitoring your Claude C
 │       ⚪ 🔍 Explore                   ││  Resume    claude --resume 299a15d3... │
 │   ▶ 03/12 14:53 /exit                ││                                        │
 │ ▶ C:\repo1 (18)                      ││  Tokens                                │
-│ ▶ C:\Users\hekuma (13)               ││    Input:    629     Output:  111.5k    │
+│ ▶ C:\Users\user (13)                 ││    Input:    629     Output:  111.5k    │
 │ ▶ C:\repo (5)                        ││    Cached:   63.0M   Total:   112.1k   │
 │                                      ││                                        │
 │                                      ││  Activity                              │
