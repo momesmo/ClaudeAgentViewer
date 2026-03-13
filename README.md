@@ -2,6 +2,8 @@
 
 A blazing-fast terminal UI for browsing, searching, and monitoring your Claude Code sessions.
 
+## Session View
+
 ```
 ╭─ Sessions (58) ──────────────────────╮╭─ Session 299a15d3... ──────────────────╮
 │ ▼ C:\repo\claudeagentViewer (2)      ││                                        │
@@ -9,44 +11,79 @@ A blazing-fast terminal UI for browsing, searching, and monitoring your Claude C
 │       ⚪ 🔍 Explore                   ││  Resume    claude --resume 299a15d3... │
 │   ▶ 03/12 14:53 /exit                ││                                        │
 │ ▶ C:\repo1 (18)                      ││  Tokens                                │
-│ ▶ C:\Users\user (13)                 ││    Input:    629     Output:  111.5k    │
-│ ▶ C:\repo (5)                        ││    Cached:   63.0M   Total:   112.1k   │
+│ ▶ C:\Users\user (13)                 ││    Input:      629                     │
+│ ▶ C:\repo (5)                        ││    Output:     111.5k                  │
+│                                      ││    Cache Write: 2.1k                   │
+│                                      ││    Cache Read:  63.0M                  │
+│                                      ││    Total:       112.1k                 │
 │                                      ││                                        │
 │                                      ││  Activity                              │
 │                                      ││    Messages: 777     Tools: 293 calls  │
 │                                      ││                                        │
 │                                      ││  Cost         $8.37                    │
 │                                      ││                                        │
-│                                      ││  Environment                           │
-│                                      ││    Energy:   0.74 kWh                  │
-│                                      ││    CO2:      370.86 g                  │
-│                                      ││    Trees:    9.7 tree-days to offset   │
+│                                      ││  Environment (estimated)               │
+│                                      ││    Energy:     0.74 kWh                │
+│                                      ││    CO2:        289.27 g                │
+│                                      ││    Tree-days:  7.5                     │
+│                                      ││    Tree-day = days 1 tree needs to     │
+│                                      ││    absorb the CO2                      │
+│                                      ││                                        │
+│                                      ││  Press l to view full transcript       │
 ╰──────────────────────────────────────╯╰────────────────────────────────────────╯
- ↑↓←→:Navigate  l:Logs  f:Flag  /:Search  Tab/S-Tab:Panes  ?:Help  q:Quit
+ ↑↓←→:Navigate  l:Logs  f:Flag  d:Dash  /:Search  Tab/S-Tab:Panes  ?:Help  q:Quit
+```
+
+## Dashboard View (`d` key)
+
+```
+  Dashboard — All Sessions
+
+  Summary
+    Sessions:   58
+    Tokens:     2.7M
+    Cost:       $1,532.53
+    Energy:     25.78 kWh
+    CO2:        10,054.3 g
+    Tree-days:  261.8
+
+  By Project
+    Project                        Sessions     Tokens       Cost      CO2
+    C:\repo1                             18       2.1M   $845.68   8979g
+    C:\repo\claudeagentViewer             2     163.1k   $312.73    587g
+    ...
+
+  By Model
+    Model                        Sessions     Tokens       Cost
+    claude-opus-4-6                    24     557.6k   $790.41
+    claude-sonnet-4-6                  22       1.0M   $179.29
+    ...
+
+  Top Sessions by Cost
+    1. $312.73  163.1k  Building claudevu TUI...
+    2. $142.50  1.2M    Arlo loop agent...
+    ...
+
+  Press d or Esc to close  ↑↓ to scroll
 ```
 
 ## Features
 
-- **3-level tree view** — Project > Session > Subagent with arrow key navigation
-- **Metadata dashboard** — tokens, cost, model, messages, tool calls per session
-- **Environment metrics** — energy (kWh), CO2 (g), tree-days to offset (inspired by [ccwatt](https://github.com/nyanko3141592/ccwatt))
-- **Subagent tracking** — see all subagents spawned by a session, with running/completed status
-- **Session flagging** — pin sessions with `f` for live monitoring (stats auto-refresh every 3s)
-- **Live log tailing** — press `l` to stream transcript in real-time for active sessions
-- **Async everything** — transcript loading never blocks the UI
+- **3-level tree view** — Project > Session > Subagent with arrow key expand/collapse
+- **Metadata dashboard** — tokens (input/output/cache write/cache read), cost, model, messages, tool calls
+- **Usage dashboard** (`d`) — aggregated stats across all sessions by project, model, and top cost
+- **Accurate pricing** — per-model rates for Opus/Sonnet/Haiku including cache token costs
+- **Environment metrics** — energy (kWh), CO2 (g), tree-days (inspired by [ccwatt](https://github.com/nyanko3141592/ccwatt))
+- **Subagent tracking** — see all subagents as children in the tree, with 🟢 running / ⚪ completed status
+- **Session flagging** (`f`) — pin sessions for live monitoring (stats auto-refresh every 3s)
+- **Live log tailing** (`l`) — stream transcript in real-time for active sessions
+- **Async everything** — all loading happens in background, UI never blocks
 - **Privacy mode** — auto-redacts API keys, tokens, and secrets (on by default)
 - **Fuzzy search** — filter sessions by prompt text, session ID, or project path
 - **Session resume** — press `r` to launch `claude --resume <id>` directly
+- **State preservation** — `Ctrl+R` refresh keeps your expanded folders, cursor, and flags
 
 ## Install
-
-### From source
-
-```bash
-go install github.com/user/claudevu@latest
-```
-
-### Build locally
 
 ```bash
 git clone https://github.com/HemantKumarMS/ClaudeAgentViewer.git
@@ -55,6 +92,8 @@ go build -o claudevu.exe .
 ./claudevu.exe
 ```
 
+Requires Go 1.22+.
+
 ## Keybindings
 
 | Key | Action |
@@ -62,8 +101,9 @@ go build -o claudevu.exe .
 | `↑` `↓` `j` `k` | Navigate tree / scroll transcript |
 | `→` or `Enter` | Expand project or session |
 | `←` | Collapse (or jump to parent) |
-| `l` | View/hide full transcript (starts live tailing) |
+| `l` | View/hide full transcript (enables live tailing) |
 | `f` | Flag/unflag session for live monitoring |
+| `d` | Usage dashboard (aggregated stats across all sessions) |
 | `Tab` / `Shift+Tab` | Switch between tree and detail panes |
 | `/` | Fuzzy search sessions |
 | `c` | Copy session ID to clipboard |
@@ -72,7 +112,7 @@ go build -o claudevu.exe .
 | `p` | Toggle privacy mode |
 | `Ctrl+R` | Force refresh (preserves UI state) |
 | `PgUp` / `PgDn` | Scroll transcript by page |
-| `?` | Help |
+| `?` | Help overlay |
 | `q` | Quit |
 
 ## How it works
@@ -84,6 +124,31 @@ claudevu reads Claude Code's local session data:
 - `~/.claude/projects/[project]/[sessionId]/subagents/` — subagent data
 
 No data leaves your machine. Everything is read-only.
+
+### Cost Calculation
+
+Costs are calculated using Anthropic's published per-model rates:
+
+| Model | Input/1M | Output/1M | Cache Write/1M | Cache Read/1M |
+|-------|----------|-----------|-----------------|---------------|
+| Opus 4.6 | $15.00 | $75.00 | $18.75 | $1.50 |
+| Sonnet 4.6 | $3.00 | $15.00 | $3.75 | $0.30 |
+| Haiku 4.5 | $0.80 | $4.00 | $1.00 | $0.08 |
+
+### Environment Metrics
+
+Energy and CO2 estimates use the following methodology:
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| Energy per token | ~0.001 Wh | arXiv:2505.09598, arXiv:2509.08867 |
+| Cache read energy | ~1% of full token | ccwatt methodology |
+| Grid carbon intensity | 0.390 kg CO2/kWh | IEA 2024 global average |
+| Tree CO2 absorption | 38.4 g/day (14 kg/year) | European Environment Agency |
+
+**Tree-day** = how many days one mature tree needs to grow to absorb the CO2 from your session. For example, 9.7 tree-days means one tree for ~10 days, or 10 trees for 1 day.
+
+> **Note:** These are rough estimates. Anthropic does not publish per-token energy data. Actual consumption depends on hardware, batch size, quantization, and data center efficiency. Treat as directional, not precise.
 
 ## Tech Stack
 
