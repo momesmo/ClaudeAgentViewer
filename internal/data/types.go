@@ -70,19 +70,37 @@ type SessionStats struct {
 	TreeDays    float64 // days of tree growth to offset
 }
 
-// ComputeEnergy calculates energy/CO2/tree metrics from token counts
-// Based on ccwatt methodology: ~0.001 Wh/token, cached reads at 1%
+// ComputeEnergy calculates energy/CO2/tree-day metrics from token counts.
+//
+// Methodology & sources:
+//   - Energy per token: ~0.001 Wh (1 mWh) per token for inference on frontier models.
+//     Based on benchmarks of Llama-3.3-70B on H100 (~0.39J/token) and GPT-4o query
+//     estimates (~0.42 Wh per short query). See: arXiv:2505.09598, arXiv:2509.08867.
+//     Cache reads use ~1% of full computation energy (ccwatt methodology).
+//   - Carbon intensity: 0.390 kg CO2/kWh — IEA 2024 global average for data centers.
+//     Individual providers vary (Google claims lower, coal-heavy grids are higher).
+//     Source: IEA "Energy and AI" report (2025).
+//   - Tree absorption: 14 kg CO2/year per mature tree = 38.4 g/day.
+//     Source: European Environment Agency, US Forest Service estimates.
+//   - Tree-days: number of days one mature tree needs to absorb the session's CO2.
+//     e.g., 9.7 tree-days = 1 tree for ~10 days, or 10 trees for ~1 day.
+//
+// CAVEAT: These are rough estimates. Anthropic does not publish per-token energy
+// data. Actual consumption depends on hardware, batch size, quantization, and
+// data center PUE. Treat these as directional, not precise.
 func (s *SessionStats) ComputeEnergy() {
-	// Energy: 0.001 Wh per token, cache reads at 1% cost
+	// Energy: ~0.001 Wh per token for full inference
+	// Cache reads are ~1% of full compute cost (served from memory, no GPU inference)
 	fullTokens := float64(s.TotalInputTokens + s.TotalOutputTokens)
 	cacheTokens := float64(s.CacheReadTokens) * 0.01
 	totalWh := (fullTokens + cacheTokens) * 0.001
 	s.EnergyKWh = totalWh / 1000.0
 
-	// CO2: 0.5 kg per kWh (global average grid intensity)
-	s.CO2Kg = s.EnergyKWh * 0.5
+	// CO2: 0.390 kg per kWh (IEA 2024 global average grid carbon intensity)
+	s.CO2Kg = s.EnergyKWh * 0.390
 
 	// Tree-days: mature tree absorbs ~38.4g CO2/day (14 kg/year)
+	// Represents how many days of one tree's growth offsets this session's emissions
 	if s.CO2Kg > 0 {
 		s.TreeDays = (s.CO2Kg * 1000) / 38.4
 	}

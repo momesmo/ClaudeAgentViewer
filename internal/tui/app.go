@@ -1047,16 +1047,18 @@ func (m Model) renderDetail(width, height int) string {
 		sb.WriteString("\n")
 
 		// Energy / Environment (ccwatt-style)
-		sb.WriteString(thinkingLabelStyle.Render("  Environment") + "\n")
-		sb.WriteString(fmt.Sprintf("    Energy:   %.4f kWh\n", s.EnergyKWh))
-		sb.WriteString(fmt.Sprintf("    CO2:      %.2f g\n", s.CO2Kg*1000))
+		sb.WriteString(thinkingLabelStyle.Render("  Environment (estimated)") + "\n")
+		sb.WriteString(fmt.Sprintf("    Energy:     %.4f kWh\n", s.EnergyKWh))
+		sb.WriteString(fmt.Sprintf("    CO2:        %.2f g\n", s.CO2Kg*1000))
 		if s.TreeDays >= 1 {
-			sb.WriteString(fmt.Sprintf("    Trees:    %.1f tree-days to offset\n", s.TreeDays))
+			sb.WriteString(fmt.Sprintf("    Tree-days:  %.1f\n", s.TreeDays))
 		} else if s.TreeDays > 0 {
-			sb.WriteString(fmt.Sprintf("    Trees:    %.2f tree-days to offset\n", s.TreeDays))
+			sb.WriteString(fmt.Sprintf("    Tree-days:  %.2f\n", s.TreeDays))
 		} else {
-			sb.WriteString("    Trees:    negligible\n")
+			sb.WriteString("    Tree-days:  negligible\n")
 		}
+		sb.WriteString(mutedStyle.Render("    Tree-day = days 1 tree needs to absorb the CO2") + "\n")
+		sb.WriteString(mutedStyle.Render("    ~0.001 Wh/tok, IEA 0.39 kgCO2/kWh, 38.4 gCO2/tree/day") + "\n")
 
 		sb.WriteString("\n")
 		if m.showLogs {
