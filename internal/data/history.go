@@ -49,6 +49,16 @@ func LoadHistory(claudeDir string) ([]ProjectGroup, error) {
 		}
 	}
 
+	// Enrich sessions with agentName/customTitle from their JSONL files
+	for id, info := range seen {
+		path := FindSessionFile(claudeDir, info.Project, info.SessionID)
+		if path != "" {
+			info.FilePath = path
+			info.AgentName, info.CustomTitle = ScanSessionMeta(path)
+			seen[id] = info
+		}
+	}
+
 	// Group by project
 	projectMap := make(map[string][]SessionInfo)
 	for _, info := range seen {

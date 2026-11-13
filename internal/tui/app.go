@@ -106,7 +106,8 @@ type Model struct {
 	dashboardScroll  int
 
 	// Resume
-	ResumeSessionID string
+	ResumeSessionID  string
+	ResumeProjectDir string
 
 	err error
 }
@@ -178,7 +179,9 @@ func (m *Model) buildListItems(filter string) {
 			for _, s := range g.Sessions {
 				if strings.Contains(strings.ToLower(s.Display), filter) ||
 					strings.Contains(strings.ToLower(s.SessionID), filter) ||
-					strings.Contains(strings.ToLower(g.Project), filter) {
+					strings.Contains(strings.ToLower(g.Project), filter) ||
+					strings.Contains(strings.ToLower(s.AgentName), filter) ||
+					strings.Contains(strings.ToLower(s.CustomTitle), filter) {
 					hasMatch = true
 					break
 				}
@@ -193,7 +196,9 @@ func (m *Model) buildListItems(filter string) {
 			for si, s := range g.Sessions {
 				if filter != "" &&
 					!strings.Contains(strings.ToLower(s.Display), filter) &&
-					!strings.Contains(strings.ToLower(s.SessionID), filter) {
+					!strings.Contains(strings.ToLower(s.SessionID), filter) &&
+					!strings.Contains(strings.ToLower(s.AgentName), filter) &&
+					!strings.Contains(strings.ToLower(s.CustomTitle), filter) {
 					continue
 				}
 				m.listItems = append(m.listItems, listItem{kind: itemSession, projectIndex: pi, sessionIndex: si})
@@ -447,6 +452,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.searching = false
 				m.searchInput.Blur()
+				m.searchInput.SetValue("")
 				m.buildListItems("")
 				return m, nil
 			case "enter":
@@ -469,6 +475,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmResume = false
 				if m.selectedInfo != nil {
 					m.ResumeSessionID = m.selectedInfo.SessionID
+					m.ResumeProjectDir = m.selectedInfo.Project
 					return m, tea.Quit
 				}
 			default:

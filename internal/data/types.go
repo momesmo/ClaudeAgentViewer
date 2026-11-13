@@ -12,11 +12,13 @@ type HistoryEntry struct {
 
 // SessionInfo is the metadata for a session (no full transcript loaded)
 type SessionInfo struct {
-	SessionID string
-	Project   string
-	Display   string
-	Timestamp time.Time
-	FilePath  string
+	SessionID   string
+	Project     string
+	Display     string
+	Timestamp   time.Time
+	FilePath    string
+	AgentName   string
+	CustomTitle string
 }
 
 

@@ -26,6 +26,44 @@ type quickLine struct {
 	Message quickMessage `json:"message"`
 }
 
+type metaLine struct {
+	Type        string `json:"type"`
+	AgentName   string `json:"agentName"`
+	CustomTitle string `json:"customTitle"`
+}
+
+// ScanSessionMeta reads the first occurrence of agentName and customTitle from a session file.
+func ScanSessionMeta(path string) (agentName, customTitle string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 64*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if agentName != "" && customTitle != "" {
+			break
+		}
+		if !strings.Contains(string(line), `"agent-name"`) && !strings.Contains(string(line), `"custom-title"`) {
+			continue
+		}
+		var ml metaLine
+		if err := json.Unmarshal(line, &ml); err != nil {
+			continue
+		}
+		if ml.Type == "agent-name" && agentName == "" {
+			agentName = ml.AgentName
+		}
+		if ml.Type == "custom-title" && customTitle == "" {
+			customTitle = ml.CustomTitle
+		}
+	}
+	return
+}
+
 // QuickScanStats reads just token counts and message count from a session file.
 // This is ~10x faster than LoadTranscript because it skips content parsing.
 func QuickScanStats(path string) (SessionStats, error) {

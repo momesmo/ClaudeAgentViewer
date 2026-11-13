@@ -56,6 +56,9 @@ func main() {
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+		if m.ResumeProjectDir != "" {
+			cmd.Dir = m.ResumeProjectDir
+		}
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error resuming session: %v\n", err)
 			os.Exit(1)
