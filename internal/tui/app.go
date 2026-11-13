@@ -105,6 +105,9 @@ type Model struct {
 	dashboardLoading bool
 	dashboardScroll  int
 
+	// Search index (content blobs keyed by session ID)
+	searchIndex map[string]data.IndexEntry
+
 	// Resume
 	ResumeSessionID  string
 	ResumeProjectDir string
@@ -152,6 +155,7 @@ func NewModel(claudeDir string) Model {
 		sessionSubagents: make(map[sessionKey][]data.SubagentInfo),
 		flaggedSessions:  make(map[string]bool),
 		flaggedStats:     make(map[string]data.SessionStats),
+		searchIndex:      make(map[string]data.IndexEntry),
 	}
 
 	groups, err := data.LoadHistory(claudeDir)
@@ -331,8 +335,18 @@ func loadSubagentTranscriptCmd(sa data.SubagentInfo) tea.Cmd {
 	}
 }
 
+// reindexCmd indexes all known sessions, passing the current index as prev.
+func (m Model) reindexCmd() tea.Cmd {
+	var sessions []data.SessionInfo
+	for _, g := range m.groups {
+		sessions = append(sessions, g.Sessions...)
+	}
+	return loadSearchIndexCmd(sessions, m.searchIndex)
+}
+
 func (m Model) Init() tea.Cmd {
-	return nil // no background polling — Ctrl+R to refresh, l for live logs
+	// No polling — Ctrl+R to refresh, l for live logs. Index content in background.
+	return m.reindexCmd()
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -387,10 +401,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case SearchIndexLoadedMsg:
+		if m.searchIndex == nil {
+			m.searchIndex = make(map[string]data.IndexEntry)
+		}
+		for id, e := range msg.Entries {
+			m.searchIndex[id] = e
+		}
+		m.buildListItems(m.searchInput.Value())
+		return m, nil
+
+	case historyChangedMsg:
+		return m, m.reindexCmd()
+
 	case sessionChangedMsg:
 		// Live tailing: reload transcript when file changes
 		if m.showLogs && m.selectedInfo != nil && m.sessionFilePath == msg.path {
-			return m, loadTranscriptCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID)
+			return m, tea.Batch(
+				loadTranscriptCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID),
+				loadSearchIndexCmd([]data.SessionInfo{*m.selectedInfo}, m.searchIndex),
+			)
 		}
 		// Keep watching
 		if m.liveWatching {
@@ -651,9 +681,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("Refreshed")
 			// Also refresh selected session stats async
 			if m.selectedInfo != nil {
-				return m, loadQuickStatsCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID)
+				return m, tea.Batch(loadQuickStatsCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID), m.reindexCmd())
 			}
-			return m, nil
+			return m, m.reindexCmd()
 
 		case key.Matches(msg, keys.Copy):
 			if m.selectedInfo != nil {
