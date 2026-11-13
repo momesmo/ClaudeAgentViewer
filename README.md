@@ -80,6 +80,7 @@ A blazing-fast terminal UI for browsing, searching, and monitoring your Claude C
 - **Async everything** — all loading happens in background, UI never blocks
 - **Privacy mode** — auto-redacts API keys, tokens, and secrets (on by default)
 - **Search** (`/`) — case-insensitive substring filter over prompt text, session ID, project path, agent name/title, and conversation content (prompts, assistant replies, tool names, git branch, model; matches found only in content are tagged `[content]`). Content is indexed in the background, so metadata matches work instantly and content matches appear as indexing finishes.
+- **Index status bar** — a second line at the bottom shows whether the disk cache is on (and where it lives, how many entries were loaded from it), index progress (`indexing…` / `ready`, sessions indexed, index size), the last cache save (time, file size, or failure), and the active search filter with its result count. On narrow terminals it shortens itself instead of wrapping.
 - **Session resume** — press `r` to launch `claude --resume <id>` directly
 - **State preservation** — `Ctrl+R` refresh keeps your expanded folders, cursor, and flags
 

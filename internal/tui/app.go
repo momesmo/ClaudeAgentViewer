@@ -113,6 +113,13 @@ type Model struct {
 	saveInFlight bool
 	saveDirty    bool
 
+	// Index/cache status shown in the second status line
+	indexJobs    int       // reindex commands started but not yet completed
+	cacheSeeded  int       // entries loaded from the disk cache at startup
+	lastSaveAt   time.Time // when the last cache save finished
+	lastSaveSize int64     // size of the cache file after the last successful save
+	lastSaveErr  string    // last save error, "" after a successful save
+
 	// Resume
 	ResumeSessionID  string
 	ResumeProjectDir string
@@ -155,6 +162,7 @@ func NewModel(claudeDir string, opts Options) Model {
 		claudeDir:        claudeDir,
 		opts:             opts,
 		searchIndex:      make(map[string]data.IndexEntry),
+		indexJobs:        1, // Init starts the first background index
 		showThinking:     false,
 		privacyMode:      true,
 		searchInput:      ti,
@@ -175,6 +183,7 @@ func NewModel(claudeDir string, opts Options) Model {
 		}
 		if m.opts.IndexCache {
 			m.searchIndex = data.LoadIndex(m.cacheDir, claudeDir)
+			m.cacheSeeded = len(m.searchIndex)
 		}
 	}
 
@@ -355,6 +364,13 @@ func (m Model) reindexCmd() tea.Cmd {
 	return loadSearchIndexCmd(sessions, m.searchIndex)
 }
 
+// startReindex starts a counted background index of all sessions. Every
+// started job is balanced by one SearchIndexLoadedMsg.
+func (m *Model) startReindex() tea.Cmd {
+	m.indexJobs++
+	return m.reindexCmd()
+}
+
 func (m Model) Init() tea.Cmd {
 	// No polling — Ctrl+R to refresh, l for live logs. Index content in background.
 	return m.reindexCmd()
@@ -413,6 +429,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case SearchIndexLoadedMsg:
+		if m.indexJobs > 0 {
+			m.indexJobs--
+		}
 		if m.searchIndex == nil {
 			m.searchIndex = make(map[string]data.IndexEntry)
 		}
@@ -432,6 +451,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case IndexSaveDoneMsg:
 		m.saveInFlight = false
+		at := msg.At
+		if at.IsZero() {
+			at = time.Now()
+		}
+		m.recordSave(msg.Err, msg.Size, at)
 		if msg.Err != nil {
 			m.setStatus("Index cache save failed: " + msg.Err.Error())
 		}
@@ -443,11 +467,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case historyChangedMsg:
-		return m, m.reindexCmd()
+		return m, m.startReindex()
 
 	case sessionChangedMsg:
 		// Live tailing: reload transcript when file changes
 		if m.showLogs && m.selectedInfo != nil && m.sessionFilePath == msg.path {
+			m.indexJobs++
 			return m, tea.Batch(
 				loadTranscriptCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID),
 				loadSearchIndexCmd([]data.SessionInfo{*m.selectedInfo}, m.searchIndex),
@@ -712,9 +737,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("Refreshed")
 			// Also refresh selected session stats async
 			if m.selectedInfo != nil {
-				return m, tea.Batch(loadQuickStatsCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID), m.reindexCmd())
+				return m, tea.Batch(loadQuickStatsCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID), m.startReindex())
 			}
-			return m, m.reindexCmd()
+			return m, m.startReindex()
 
 		case key.Matches(msg, keys.Copy):
 			if m.selectedInfo != nil {
@@ -914,7 +939,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) ensureListVisible() {
-	listHeight := m.height - 6
+	listHeight := m.height - 8
 	if listHeight < 1 {
 		listHeight = 1
 	}
@@ -950,7 +975,10 @@ func (m Model) renderMain() string {
 	}
 	detailWidth := m.width - listWidth - 3
 
-	contentHeight := m.height - 2
+	// Pane = contentHeight + 2 border rows; plus the keys bar and the index bar.
+	// (Before the index bar existed this was height-2, which overflowed the
+	// terminal by one row and clipped the panes' top border.)
+	contentHeight := m.height - 4
 	innerHeight := contentHeight - 2
 
 	listContent := m.renderList(listWidth, innerHeight)
@@ -977,7 +1005,7 @@ func (m Model) renderMain() string {
 		listBorder.Render(listContent),
 		detailBorder.Render(detailContent))
 
-	return lipgloss.JoinVertical(lipgloss.Left, main, m.renderStatusBar())
+	return lipgloss.JoinVertical(lipgloss.Left, main, m.renderStatusBar(), m.renderIndexBar())
 }
 
 func (m Model) renderList(width, height int) string {
@@ -1467,7 +1495,11 @@ func copyToClipboard(text string) {
 }
 
 // IndexSaveDoneMsg reports a finished cache save (Err non-nil on failure; non-fatal).
-type IndexSaveDoneMsg struct{ Err error }
+type IndexSaveDoneMsg struct {
+	Err  error
+	Size int64     // cache file size after a successful save
+	At   time.Time // when the save finished
+}
 
 // liveIndexCopy copies the index, dropping sessions no longer in m.groups.
 func (m Model) liveIndexCopy() map[string]data.IndexEntry {
@@ -1489,6 +1521,13 @@ func (m Model) liveIndexCopy() map[string]data.IndexEntry {
 // saveIndexCmd persists idx (already a private copy) off the UI goroutine.
 func saveIndexCmd(cacheDir, claudeDir string, idx map[string]data.IndexEntry) tea.Cmd {
 	return func() tea.Msg {
-		return IndexSaveDoneMsg{Err: data.SaveIndex(cacheDir, claudeDir, idx)}
+		err := data.SaveIndex(cacheDir, claudeDir, idx)
+		msg := IndexSaveDoneMsg{Err: err, At: time.Now()}
+		if err == nil {
+			if fi, serr := os.Stat(data.IndexPath(cacheDir)); serr == nil {
+				msg.Size = fi.Size()
+			}
+		}
+		return msg
 	}
 }
