@@ -364,6 +364,54 @@ func (m Model) reindexCmd() tea.Cmd {
 	return loadSearchIndexCmd(sessions, m.searchIndex)
 }
 
+// pruneUnknownIndexEntries drops index entries for sessions that are no longer
+// in history, returning how many were removed.
+func (m *Model) pruneUnknownIndexEntries() int {
+	live := make(map[string]bool)
+	for _, g := range m.groups {
+		for _, s := range g.Sessions {
+			live[s.SessionID] = true
+		}
+	}
+	n := 0
+	for id := range m.searchIndex {
+		if !live[id] {
+			delete(m.searchIndex, id)
+			n++
+		}
+	}
+	return n
+}
+
+// rebuildListKeepingCursor rebuilds the filtered list (rows can appear or
+// vanish when the index changes under an active filter) and keeps the cursor
+// on the same item. If that item is gone, the cursor is clamped into range.
+func (m *Model) rebuildListKeepingCursor() {
+	var sel *listItem
+	if m.listCursor >= 0 && m.listCursor < len(m.listItems) {
+		c := m.listItems[m.listCursor]
+		sel = &c
+	}
+	m.buildListItems(m.searchInput.Value())
+	if sel != nil {
+		for i, it := range m.listItems {
+			if it.kind == sel.kind && it.projectIndex == sel.projectIndex &&
+				it.sessionIndex == sel.sessionIndex && it.subagentIdx == sel.subagentIdx {
+				m.listCursor = i
+				m.ensureListVisible()
+				return
+			}
+		}
+	}
+	if m.listCursor >= len(m.listItems) {
+		m.listCursor = len(m.listItems) - 1
+	}
+	if m.listCursor < 0 {
+		m.listCursor = 0
+	}
+	m.ensureListVisible()
+}
+
 // startReindex starts a counted background index of all sessions. Every
 // started job is balanced by one SearchIndexLoadedMsg.
 func (m *Model) startReindex() tea.Cmd {
@@ -438,8 +486,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for id, e := range msg.Entries {
 			m.searchIndex[id] = e
 		}
-		m.buildListItems(m.searchInput.Value())
-		if m.opts.IndexCache && len(msg.Entries) > 0 {
+		dropped := 0
+		for _, id := range msg.Removed { // transcript deleted: stop matching its old text
+			if _, ok := m.searchIndex[id]; ok {
+				delete(m.searchIndex, id)
+				dropped++
+			}
+		}
+		dropped += m.pruneUnknownIndexEntries()
+		m.rebuildListKeepingCursor()
+		if m.opts.IndexCache && (len(msg.Entries) > 0 || dropped > 0) {
 			if m.saveInFlight {
 				m.saveDirty = true
 				return m, nil
@@ -1175,6 +1231,10 @@ func (m Model) renderDetail(width, height int) string {
 	if m.confirmResume {
 		sb.WriteString(toolLabelStyle.Render("  Resume this session? (y/n)"))
 		sb.WriteString("\n\n")
+	}
+
+	if m.selectedSub == nil && m.searchInput.Value() != "" {
+		sb.WriteString(m.renderSearchMatch(width))
 	}
 
 	// Metadata dashboard (always shown)

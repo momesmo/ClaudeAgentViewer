@@ -51,7 +51,8 @@ func TestUpdate_SearchIndexLoadedMsg_MergesAndRebuilds(t *testing.T) {
 	before := len(m.listItems)
 	nm, _ := m.Update(SearchIndexLoadedMsg{Entries: map[string]data.IndexEntry{"s1": {Blob: "zzz"}}})
 	got := nm.(Model)
-	if len(got.searchIndex) != 2 || got.searchIndex["s1"].Blob != "zzz" {
+	// s1 is merged; "old" belongs to no known session, so it is pruned.
+	if len(got.searchIndex) != 1 || got.searchIndex["s1"].Blob != "zzz" {
 		t.Fatalf("not merged: %v", got.searchIndex)
 	}
 	if before == 0 {

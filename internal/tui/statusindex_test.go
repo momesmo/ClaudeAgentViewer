@@ -215,3 +215,5 @@ func TestListCursorStaysVisibleWithIndexBar(t *testing.T) {
 		}
 	}
 }
+
+func lipglossWidth(s string) int { return lipgloss.Width(s) }
