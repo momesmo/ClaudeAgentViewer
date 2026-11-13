@@ -55,7 +55,6 @@ type sessionKey struct {
 
 type Model struct {
 	groups    []data.ProjectGroup
-	searchIndex map[string]data.IndexEntry
 	claudeDir string
 	width     int
 	height    int
@@ -158,7 +157,6 @@ func NewModel(claudeDir string) Model {
 		sessionSubagents: make(map[sessionKey][]data.SubagentInfo),
 		flaggedSessions:  make(map[string]bool),
 		flaggedStats:     make(map[string]data.SessionStats),
-		searchIndex:      make(map[string]data.IndexEntry),
 	}
 
 	groups, err := data.LoadHistory(claudeDir)
