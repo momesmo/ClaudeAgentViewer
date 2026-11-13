@@ -56,10 +56,12 @@ func TestLoadIndex_DifferentClaudeDir(t *testing.T) {
 
 func TestSaveIndex_RedactsSecrets(t *testing.T) {
 	dir := t.TempDir()
-	secret := "AKIAABCDEFGHIJKLMNOP"
-	SaveIndex(dir, "c", map[string]IndexEntry{"a": {Blob: "key " + secret + " end"}})
+	aws := "akiaabcdefghijklmnop"
+	jwt := "eyjhbgcioijiuzi1niisinr5cci.eyjzdwiioiixmjmondu2nzg5mcj9.sflkxwrjsmeki2ivbfa3wvrq"
+	blob := strings.ToLower("key AKIAABCDEFGHIJKLMNOP end ") + jwt
+	SaveIndex(dir, "c", map[string]IndexEntry{"a": {Blob: blob}})
 	got := LoadIndex(dir, "c")["a"].Blob
-	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") {
+	if strings.Contains(got, aws) || strings.Contains(got, "eyjhbg") || strings.Count(got, "[REDACTED]") != 2 {
 		t.Fatalf("not redacted: %q", got)
 	}
 }

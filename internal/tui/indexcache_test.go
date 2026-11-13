@@ -45,3 +45,29 @@ func TestUpdate_IndexLoaded_SavesWhenEnabled(t *testing.T) {
 		t.Fatal("expected nil cmd")
 	}
 }
+
+func TestUpdate_IndexLoaded_CoalescesSaves(t *testing.T) {
+	t.Setenv("CLAUDEVU_INDEX_CACHE", "")
+	msg := SearchIndexLoadedMsg{Entries: map[string]data.IndexEntry{"a": {Blob: "x"}}}
+	m := NewModel(t.TempDir(), Options{IndexCache: true, CacheDir: t.TempDir()})
+	r, cmd := m.Update(msg)
+	if cmd == nil {
+		t.Fatal("first save expected")
+	}
+	m = r.(Model)
+	for i := 0; i < 2; i++ {
+		r, cmd = m.Update(msg)
+		if cmd != nil {
+			t.Fatal("save must be skipped while in flight")
+		}
+		m = r.(Model)
+	}
+	r, cmd = m.Update(IndexSaveDoneMsg{})
+	if cmd == nil {
+		t.Fatal("expected exactly one follow-up save")
+	}
+	m = r.(Model)
+	if _, cmd = m.Update(IndexSaveDoneMsg{}); cmd != nil {
+		t.Fatal("no further save expected")
+	}
+}

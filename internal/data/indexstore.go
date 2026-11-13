@@ -59,7 +59,7 @@ func SaveIndex(cacheDir, claudeDir string, idx map[string]IndexEntry) error {
 	_ = os.Chmod(cacheDir, 0o700)
 	red := make(map[string]IndexEntry, len(idx))
 	for k, e := range idx {
-		e.Blob = RedactSecrets(e.Blob)
+		e.Blob = RedactSecretsFold(e.Blob)
 		red[k] = e
 	}
 	tmp, err := os.CreateTemp(cacheDir, "search-index-*.tmp")

@@ -110,6 +110,8 @@ type Model struct {
 	searchIndex map[string]data.IndexEntry
 	opts        Options
 	cacheDir    string
+	saveInFlight bool
+	saveDirty    bool
 
 	// Resume
 	ResumeSessionID  string
@@ -419,12 +421,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.buildListItems(m.searchInput.Value())
 		if m.opts.IndexCache && len(msg.Entries) > 0 {
+			if m.saveInFlight {
+				m.saveDirty = true
+				return m, nil
+			}
+			m.saveInFlight = true
 			return m, saveIndexCmd(m.cacheDir, m.claudeDir, m.liveIndexCopy())
 		}
 		return m, nil
 
-	case IndexSaveErrMsg:
-		m.setStatus("Index cache save failed: " + msg.Err.Error())
+	case IndexSaveDoneMsg:
+		m.saveInFlight = false
+		if msg.Err != nil {
+			m.setStatus("Index cache save failed: " + msg.Err.Error())
+		}
+		if m.saveDirty && m.opts.IndexCache {
+			m.saveDirty = false
+			m.saveInFlight = true
+			return m, saveIndexCmd(m.cacheDir, m.claudeDir, m.liveIndexCopy())
+		}
 		return m, nil
 
 	case historyChangedMsg:
@@ -1442,8 +1457,8 @@ func copyToClipboard(text string) {
 	_ = cmd.Run()
 }
 
-// IndexSaveErrMsg reports a failed cache save (non-fatal).
-type IndexSaveErrMsg struct{ Err error }
+// IndexSaveDoneMsg reports a finished cache save (Err non-nil on failure; non-fatal).
+type IndexSaveDoneMsg struct{ Err error }
 
 // liveIndexCopy copies the index, dropping sessions no longer in m.groups.
 func (m Model) liveIndexCopy() map[string]data.IndexEntry {
@@ -1465,9 +1480,6 @@ func (m Model) liveIndexCopy() map[string]data.IndexEntry {
 // saveIndexCmd persists idx (already a private copy) off the UI goroutine.
 func saveIndexCmd(cacheDir, claudeDir string, idx map[string]data.IndexEntry) tea.Cmd {
 	return func() tea.Msg {
-		if err := data.SaveIndex(cacheDir, claudeDir, idx); err != nil {
-			return IndexSaveErrMsg{Err: err}
-		}
-		return nil
+		return IndexSaveDoneMsg{Err: data.SaveIndex(cacheDir, claudeDir, idx)}
 	}
 }
