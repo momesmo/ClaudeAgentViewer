@@ -94,6 +94,16 @@ go build -o claudevu.exe .
 
 Requires Go 1.22+.
 
+## Index cache (opt-in)
+
+By default the content search index is built in memory only. To persist it between runs:
+
+- `--index-cache` (or `CLAUDEVU_INDEX_CACHE=1`/`true`) enables the cache; `--index-cache=false` overrides the env var.
+- `--cache-dir <path>` overrides the location (default: `<user cache dir>/claudevu`).
+- `--clear-cache` deletes the cache file and exits.
+
+Privacy note: the cache stores lowercased text from your prompts and assistant replies (secrets are redacted by pattern, but redaction is best-effort). It is written with mode 0600 and never under `~/.claude/`. Use `--clear-cache` to remove it.
+
 ## Keybindings
 
 | Key | Action |
@@ -123,7 +133,7 @@ claudevu reads Claude Code's local session data:
 - `~/.claude/projects/[project]/[sessionId].jsonl` — full transcripts
 - `~/.claude/projects/[project]/[sessionId]/subagents/` — subagent data
 
-No data leaves your machine. Everything is read-only.
+No data leaves your machine. Everything is read-only, except the optional index cache described below.
 
 ### Cost Calculation
 

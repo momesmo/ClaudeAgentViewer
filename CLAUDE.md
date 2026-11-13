@@ -23,7 +23,7 @@ go test -race ./...
 
 ## Architecture
 
-`claudevu` is a Bubble Tea TUI that reads Claude Code's local session data from `~/.claude/` — no writes, no network.
+`claudevu` is a Bubble Tea TUI that reads Claude Code's local session data from `~/.claude/` — no writes (except the opt-in index cache under the user cache dir, never `~/.claude/`), no network.
 
 **Entry point** (`main.go`): Starts the Bubble Tea program, then after the TUI exits checks `m.ResumeSessionID` — if set, execs `claude --resume <id>`. Resume is the only side-effect the TUI triggers on the host.
 

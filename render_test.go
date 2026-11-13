@@ -23,7 +23,7 @@ func TestFullRender(t *testing.T) {
 	homeDir, _ := os.UserHomeDir()
 	claudeDir := filepath.Join(homeDir, ".claude")
 
-	m := tui.NewModel(claudeDir)
+	m := tui.NewModel(claudeDir, tui.Options{})
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	view := m.View()
@@ -99,7 +99,7 @@ func TestSubagentTreeView(t *testing.T) {
 	}
 
 	// Build model and simulate navigating to the session
-	m := tui.NewModel(claudeDir)
+	m := tui.NewModel(claudeDir, tui.Options{})
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 50})
 
 	// Navigate through list to find the target session

@@ -27,7 +27,7 @@ func TestTreeView(t *testing.T) {
 	claudeDir := filepath.Join(homeDir, ".claude")
 
 	t0 := time.Now()
-	m := tui.NewModel(claudeDir)
+	m := tui.NewModel(claudeDir, tui.Options{})
 	m = upd(m, tea.WindowSizeMsg{Width: 120, Height: 35})
 	fmt.Printf("Init: %v\n", time.Since(t0))
 

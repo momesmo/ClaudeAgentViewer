@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/user/claudevu/internal/data"
 	"github.com/user/claudevu/internal/tui"
 )
 
@@ -16,13 +17,59 @@ var version = "dev"
 func main() {
 	var (
 		showVersion bool
+		indexCache  bool
+		clearCache  bool
+		cacheDirArg string
 	)
 
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
+	flag.BoolVar(&indexCache, "index-cache", false, "Persist the search index to an on-disk cache (also CLAUDEVU_INDEX_CACHE=1)")
+	flag.BoolVar(&clearCache, "clear-cache", false, "Delete the on-disk index cache and exit")
+	flag.StringVar(&cacheDirArg, "cache-dir", "", "Cache directory (default: user cache dir/claudevu)")
 	flag.Parse()
 
 	if showVersion {
 		fmt.Printf("claudevu %s\n", version)
+		os.Exit(0)
+	}
+
+	flagSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "index-cache" {
+			flagSet = true
+		}
+	})
+	enableCache := tui.ResolveIndexCache(flagSet, indexCache, os.Getenv("CLAUDEVU_INDEX_CACHE"))
+
+	cacheDir := cacheDirArg
+	if cacheDir == "" {
+		d, err := data.DefaultCacheDir()
+		if err != nil {
+			if clearCache {
+				fmt.Fprintf(os.Stderr, "Error: cannot determine cache directory: %v\n", err)
+				os.Exit(1)
+			}
+			if enableCache {
+				fmt.Fprintf(os.Stderr, "Warning: cannot determine cache directory (%v); index cache disabled\n", err)
+				enableCache = false
+			}
+		} else {
+			cacheDir = d
+		}
+	}
+
+	if clearCache {
+		path := data.IndexPath(cacheDir)
+		removed, err := data.ClearIndex(cacheDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if removed {
+			fmt.Printf("Removed %s\n", path)
+		} else {
+			fmt.Printf("No cache found at %s\n", path)
+		}
 		os.Exit(0)
 	}
 
@@ -40,7 +87,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	model := tui.NewModel(claudeDir)
+	model := tui.NewModel(claudeDir, tui.Options{IndexCache: enableCache, CacheDir: cacheDir})
 
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	finalModel, err := p.Run()

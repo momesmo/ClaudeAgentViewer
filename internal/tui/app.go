@@ -108,6 +108,8 @@ type Model struct {
 
 	// Search index (content blobs keyed by session ID)
 	searchIndex map[string]data.IndexEntry
+	opts        Options
+	cacheDir    string
 
 	// Resume
 	ResumeSessionID  string
@@ -142,13 +144,14 @@ type SubagentTranscriptLoadedMsg struct {
 	Stats    data.SessionStats
 }
 
-func NewModel(claudeDir string) Model {
+func NewModel(claudeDir string, opts Options) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Search sessions..."
 	ti.CharLimit = 100
 
 	m := Model{
 		claudeDir:        claudeDir,
+		opts:             opts,
 		searchIndex:      make(map[string]data.IndexEntry),
 		showThinking:     false,
 		privacyMode:      true,
@@ -157,6 +160,20 @@ func NewModel(claudeDir string) Model {
 		sessionSubagents: make(map[sessionKey][]data.SubagentInfo),
 		flaggedSessions:  make(map[string]bool),
 		flaggedStats:     make(map[string]data.SessionStats),
+	}
+
+	if opts.IndexCache {
+		m.cacheDir = opts.CacheDir
+		if m.cacheDir == "" {
+			if d, err := data.DefaultCacheDir(); err == nil {
+				m.cacheDir = d
+			} else {
+				m.opts.IndexCache = false
+			}
+		}
+		if m.opts.IndexCache {
+			m.searchIndex = data.LoadIndex(m.cacheDir, claudeDir)
+		}
 	}
 
 	groups, err := data.LoadHistory(claudeDir)
@@ -401,6 +418,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchIndex[id] = e
 		}
 		m.buildListItems(m.searchInput.Value())
+		if m.opts.IndexCache && len(msg.Entries) > 0 {
+			return m, saveIndexCmd(m.cacheDir, m.claudeDir, m.liveIndexCopy())
+		}
+		return m, nil
+
+	case IndexSaveErrMsg:
+		m.setStatus("Index cache save failed: " + msg.Err.Error())
 		return m, nil
 
 	case historyChangedMsg:
@@ -1416,4 +1440,34 @@ func copyToClipboard(text string) {
 	}
 	cmd.Env = os.Environ()
 	_ = cmd.Run()
+}
+
+// IndexSaveErrMsg reports a failed cache save (non-fatal).
+type IndexSaveErrMsg struct{ Err error }
+
+// liveIndexCopy copies the index, dropping sessions no longer in m.groups.
+func (m Model) liveIndexCopy() map[string]data.IndexEntry {
+	live := make(map[string]bool)
+	for _, g := range m.groups {
+		for _, s := range g.Sessions {
+			live[s.SessionID] = true
+		}
+	}
+	out := make(map[string]data.IndexEntry, len(m.searchIndex))
+	for id, e := range m.searchIndex {
+		if live[id] {
+			out[id] = e
+		}
+	}
+	return out
+}
+
+// saveIndexCmd persists idx (already a private copy) off the UI goroutine.
+func saveIndexCmd(cacheDir, claudeDir string, idx map[string]data.IndexEntry) tea.Cmd {
+	return func() tea.Msg {
+		if err := data.SaveIndex(cacheDir, claudeDir, idx); err != nil {
+			return IndexSaveErrMsg{Err: err}
+		}
+		return nil
+	}
 }
