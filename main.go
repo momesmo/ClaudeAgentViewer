@@ -23,7 +23,7 @@ func main() {
 	)
 
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
-	flag.BoolVar(&indexCache, "index-cache", false, "Persist the search index to an on-disk cache (also CLAUDEVU_INDEX_CACHE=1)")
+	flag.BoolVar(&indexCache, "index-cache", false, "Persist the search index to an on-disk cache, best-effort secret redaction, see README (also CLAUDEVU_INDEX_CACHE=1)")
 	flag.BoolVar(&clearCache, "clear-cache", false, "Delete the on-disk index cache and exit")
 	flag.StringVar(&cacheDirArg, "cache-dir", "", "Cache directory (default: user cache dir/claudevu)")
 	flag.Parse()

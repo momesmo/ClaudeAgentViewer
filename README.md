@@ -102,7 +102,13 @@ By default the content search index is built in memory only. To persist it betwe
 - `--cache-dir <path>` overrides the location (default: `<user cache dir>/claudevu`).
 - `--clear-cache` deletes the cache file and exits.
 
-Privacy note: the cache stores lowercased text from your prompts and assistant replies (secrets are redacted by pattern, but redaction is best-effort). It is written with mode 0600 and never under `~/.claude/`. Use `--clear-cache` to remove it.
+### Privacy: what the cache stores and what redaction does (and doesn't) do
+
+- The cache stores **lowercased text from your prompts and assistant replies** (plus tool names, git branch and model), capped at 40 KB per session. It does not store tool inputs, tool results or thinking blocks.
+- The file is written with mode 0600 and never under `~/.claude/`. `--clear-cache` removes it, including leftover temp files.
+- **Secrets are redacted before anything is written, but redaction is best-effort pattern matching, not a guarantee.** It covers common formats: Anthropic/OpenAI/GitHub/AWS/Google/Stripe/SendGrid/Hugging Face/npm/Slack tokens, JWTs, PEM private keys, `Authorization: Bearer ...`, passwords in URLs, and `password=`/`token:`/`api_key=`-style assignments (values of 8+ characters). It does **not** catch unknown token formats, short or unlabeled passwords, or secrets split across the 40 KB cut. Don't treat the cache as safe to share; delete it with `--clear-cache` if in doubt.
+- The same rules power Privacy mode (`p`) in the transcript view, so the same limits apply there.
+- Redaction applies to the saved copy only. In the live session you can still search for a secret you pasted. After a restart with the cache enabled, that secret is `[REDACTED]` in the loaded cache and won't match until its session file changes (or you run `--clear-cache`).
 
 ## Keybindings
 

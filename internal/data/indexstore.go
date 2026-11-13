@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
 // IndexVersion must be bumped whenever blob contents or MaxBlobBytes change.
-const IndexVersion = 2
+const IndexVersion = 3
 
 type indexHeader struct {
 	Version   int
@@ -60,9 +62,10 @@ func SaveIndex(cacheDir, claudeDir string, idx map[string]IndexEntry) error {
 	sweepTmp(cacheDir)
 	red := make(map[string]IndexEntry, len(idx))
 	for k, e := range idx {
-		e.Blob = RedactSecretsFold(e.Blob)
+		e.Blob = redactBlobCached(k, e)
 		red[k] = e
 	}
+	pruneRedactCache(idx)
 	tmp, err := os.CreateTemp(cacheDir, "search-index-*.tmp")
 	if err != nil {
 		return err
@@ -145,4 +148,44 @@ func PathInside(path, dir string) bool {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// redactCache remembers the redacted form of each session's blob so a save
+// only re-runs the (comparatively slow) regexes for sessions that changed
+// since the previous save. An entry is current while its mod-time and blob
+// length are unchanged; blobs are rebuilt whenever the session file changes.
+type redactCacheEntry struct {
+	modTime time.Time
+	blobLen int
+	out     string
+}
+
+var (
+	redactMu    sync.Mutex
+	redactCache = map[string]redactCacheEntry{}
+)
+
+func redactBlobCached(key string, e IndexEntry) string {
+	redactMu.Lock()
+	c, ok := redactCache[key]
+	redactMu.Unlock()
+	if ok && c.modTime.Equal(e.ModTime) && c.blobLen == len(e.Blob) {
+		return c.out
+	}
+	out := RedactSecretsFold(e.Blob)
+	redactMu.Lock()
+	redactCache[key] = redactCacheEntry{e.ModTime, len(e.Blob), out}
+	redactMu.Unlock()
+	return out
+}
+
+// pruneRedactCache drops cache entries for sessions no longer in the index.
+func pruneRedactCache(idx map[string]IndexEntry) {
+	redactMu.Lock()
+	defer redactMu.Unlock()
+	for k := range redactCache {
+		if _, ok := idx[k]; !ok {
+			delete(redactCache, k)
+		}
+	}
 }

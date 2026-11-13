@@ -145,17 +145,53 @@ func TestPathInside(t *testing.T) {
 	}
 }
 
-func TestSaveIndex_RedactionFast(t *testing.T) {
+// Text without secret-like hints must skip the regexes almost entirely.
+func TestRedactSecretsFold_PlainTextFast(t *testing.T) {
 	blob := strings.Repeat("lorem ipsum dolor sit amet ", 1600)[:40*1024]
-	idx := map[string]IndexEntry{}
-	for i := 0; i < 1000; i++ {
-		idx[fmt.Sprint(i)] = IndexEntry{Blob: blob}
-	}
 	start := time.Now()
-	for _, e := range idx {
-		RedactSecretsFold(e.Blob)
+	for i := 0; i < 1000; i++ {
+		RedactSecretsFold(blob)
 	}
 	if d := time.Since(start); d > time.Second {
-		t.Errorf("redaction too slow: %v", d)
+		t.Errorf("plain-text redaction too slow: %v", d)
+	}
+}
+
+// Dense code-like text trips the hint prefilters ("key", "token", "://", "sk-")
+// so the contextual regexes really run. The first save pays that cost; later
+// saves of unchanged sessions must reuse the cached redaction.
+func TestSaveIndex_RedactionCachedAcrossSaves(t *testing.T) {
+	unit := "func parseToken(key string) { u := \"https://example.com/a\"; risk-free task-ant lorem ipsum token: none } "
+	mod := time.Now()
+	idx := map[string]IndexEntry{}
+	for i := 0; i < 20; i++ {
+		// distinct keys + tweak so entries differ; same modTime reused on 2nd save
+		idx[fmt.Sprint("dense", i)] = IndexEntry{ModTime: mod, Blob: strings.Repeat(unit, 500)[:40*1024-i]}
+	}
+	dir := t.TempDir()
+	t0 := time.Now()
+	if err := SaveIndex(dir, "c", idx); err != nil {
+		t.Fatal(err)
+	}
+	first := time.Since(t0)
+	t1 := time.Now()
+	if err := SaveIndex(dir, "c", idx); err != nil {
+		t.Fatal(err)
+	}
+	second := time.Since(t1)
+	t.Logf("20 dense sessions: first save %v, cached save %v", first, second)
+	if second*3 > first {
+		t.Errorf("second save (%v) should be much faster than first (%v)", second, first)
+	}
+	// A changed session (new mod-time) is re-redacted.
+	e := idx["dense0"]
+	e.ModTime = mod.Add(time.Second)
+	e.Blob = "password=hunter2hunter2 " + e.Blob
+	idx["dense0"] = e
+	if err := SaveIndex(dir, "c", idx); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadIndex(dir, "c")["dense0"].Blob; strings.Contains(got, "hunter2hunter2") {
+		t.Errorf("changed session not re-redacted: %.60q", got)
 	}
 }
