@@ -19,6 +19,7 @@ type SessionInfo struct {
 	FilePath    string
 	AgentName   string
 	CustomTitle string
+	SearchMeta  string // lowercase metadata joined by \x00; see FillSearchMeta
 }
 
 
