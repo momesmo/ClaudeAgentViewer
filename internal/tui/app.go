@@ -113,7 +113,7 @@ type Model struct {
 	saveInFlight bool
 	saveDirty    bool
 
-	// Index/cache status shown in the second status line
+	// Index/cache status shown in the index bar (above the key-hint bar)
 	indexJobs    int       // reindex commands started but not yet completed
 	cacheSeeded  int       // entries loaded from the disk cache at startup
 	lastSaveAt   time.Time // when the last cache save finished
@@ -1005,7 +1005,7 @@ func (m Model) renderMain() string {
 		listBorder.Render(listContent),
 		detailBorder.Render(detailContent))
 
-	return lipgloss.JoinVertical(lipgloss.Left, main, m.renderStatusBar(), m.renderIndexBar())
+	return lipgloss.JoinVertical(lipgloss.Left, main, m.renderIndexBar(), m.renderStatusBar())
 }
 
 func (m Model) renderList(width, height int) string {

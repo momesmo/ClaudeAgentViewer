@@ -150,10 +150,11 @@ func TestRenderMain_ShowsBothBarsAndFits(t *testing.T) {
 	if len(lines) > m.height {
 		t.Errorf("view is %d lines tall, terminal is %d", len(lines), m.height)
 	}
+	// Order, top to bottom: panes, index bar, keys bar (keys bar stays the last line).
 	last := lines[len(lines)-1]
 	prev := lines[len(lines)-2]
-	if !strings.Contains(last, "Cache") || !strings.Contains(prev, "Navigate") {
-		t.Errorf("want keys bar above index bar:\n%q\n%q", prev, last)
+	if !strings.Contains(last, "Navigate") || !strings.Contains(prev, "Cache") {
+		t.Errorf("want index bar above keys bar:\n%q\n%q", prev, last)
 	}
 }
 

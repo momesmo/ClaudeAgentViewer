@@ -48,7 +48,7 @@ Note: the root-package tests (`render_test.go`, `screenshot_test.go`, ...) run a
 **TUI layer** (`internal/tui/`):
 - `app.go` — the entire Bubble Tea `Model` / `Update` / `View` cycle. The model is a 3-level tree (Project → Session → Subagent). All data loading is async via `tea.Cmd` returning typed messages (`QuickStatsLoadedMsg`, `TranscriptLoadedMsg`, etc.).
 - `searchindex.go` — `loadSearchIndexCmd` builds the content index in the background (`SearchIndexLoadedMsg`)
-- `statusindex.go` — `renderIndexBar`: second status line (cache on/off + path, index progress, save state, filter count); segments shrink then drop by priority so it never wraps. `Model.indexJobs` counts started-but-unfinished reindexes (use `startReindex()`, balanced by `SearchIndexLoadedMsg`)
+- `statusindex.go` — `renderIndexBar`: status line shown above the key-hint bar (cache on/off + path, index progress, save state, filter count); segments shrink then drop by priority so it never wraps. `Model.indexJobs` counts started-but-unfinished reindexes (use `startReindex()`, balanced by `SearchIndexLoadedMsg`)
 - `options.go` — `Options` and `ResolveIndexCache` (flag/env resolution)
 - `keys.go` — centralized key bindings; all key handling in `app.go` uses `key.Matches()` against this map.
 - `message_render.go` — renders individual JSONL messages (user/assistant/tool) into styled strings

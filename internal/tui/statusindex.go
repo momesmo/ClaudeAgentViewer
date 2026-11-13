@@ -19,7 +19,7 @@ type statusSeg struct {
 
 const statusSep = " │ "
 
-// renderIndexBar renders the second status line: cache on/off and location,
+// renderIndexBar renders the index status line (above the key-hint bar): cache on/off and location,
 // index progress, save state, and the active filter. Segments are listed in
 // priority order; lower-priority ones are dropped first on narrow terminals,
 // so the bar never wraps.
