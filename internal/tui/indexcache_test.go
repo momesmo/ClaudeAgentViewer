@@ -81,19 +81,35 @@ func TestRenderList_ContentRowSingleLine(t *testing.T) {
 	m := Model{
 		groups:      []data.ProjectGroup{{Project: "p", Expanded: true, Sessions: []data.SessionInfo{s}}},
 		searchIndex: map[string]data.IndexEntry{"s1": {Blob: "zzz needle zzz"}},
+		focus:       focusList,
 	}
-	m.buildListItems("needle")
+
+	// Baseline: the same rows with no filter, so no [content] hint is shown.
+	m.buildListItems("")
+	baseLines := map[int]int{}
 	for _, cur := range []int{1, 0} {
 		m.listCursor = cur
-		m.focus = focusList
+		baseLines[cur] = strings.Count(m.renderList(50, 10), "\n")
+	}
+
+	m.buildListItems("needle")
+	if len(m.listItems) != 2 || m.listItems[1].matchKind != data.MatchContent {
+		t.Fatalf("setup: expected project+content-matched session, got %+v", m.listItems)
+	}
+	for _, cur := range []int{1, 0} { // 1 = session row selected, 0 = not selected
+		m.listCursor = cur
 		out := m.renderList(50, 10)
+		if !strings.Contains(out, "[content]") {
+			t.Errorf("cursor %d: expected [content] hint in output", cur)
+		}
 		for i, line := range strings.Split(out, "\n") {
 			if lipgloss.Width(line) > 50 {
 				t.Errorf("cursor %d line %d too wide: %d", cur, i, lipgloss.Width(line))
 			}
 		}
-		if n := strings.Count(out, "\n"); n > 4 {
-			t.Errorf("cursor %d: expected few lines, got %d", cur, n+1)
+		// The hint must not wrap: same number of lines as the un-hinted rows.
+		if got := strings.Count(out, "\n"); got != baseLines[cur] {
+			t.Errorf("cursor %d: [content] row wrapped: %d lines, baseline %d", cur, got+1, baseLines[cur]+1)
 		}
 	}
 }

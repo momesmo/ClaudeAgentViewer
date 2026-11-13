@@ -1312,7 +1312,7 @@ func (m Model) renderHelp() string {
 
 	helpItems := []struct{ key, desc string }{
 		{"↑/↓ or j/k", "Navigate tree or scroll transcript"},
-		{"→ or Enter", "Expand project/session"},
+		{"→ or Enter", "Expand project/session (sessions list their subagents)"},
 		{"←", "Collapse (or jump to parent)"},
 		{"l", "View/hide full transcript (starts live tailing)"},
 		{"f", "Flag/unflag session for monitoring (auto-refresh)"},
