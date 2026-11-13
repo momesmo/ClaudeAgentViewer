@@ -20,13 +20,13 @@ var secretSamples = []struct{ name, text, secret string }{
 	{"github ghu", "ghu_" + strings.Repeat("a1B2", 9), "a1B2a1B2a1B2"},
 	{"github ghr", "ghr_" + strings.Repeat("a1B2", 9), "a1B2a1B2a1B2"},
 	{"github fine-grained", "github_pat_11ABCDEFG0abcdefghij_klmnopqrstuvwxyz0123456789ABCDEFGHIJ", "klmnopqrstuvwxyz"},
-	{"aws access", "id AK"+"IAIOSFODNN7EXAMPLE", "IOSFODNN7EXAMPLE"},
-	{"aws temp", "id AS"+"IAIOSFODNN7EXAMPLE", "IOSFODNN7EXAMPLE"},
+	{"aws access", "id AK" + "IAIOSFODNN7EXAMPLE", "IOSFODNN7EXAMPLE"},
+	{"aws temp", "id AS" + "IAIOSFODNN7EXAMPLE", "IOSFODNN7EXAMPLE"},
 	{"aws secret key", "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "wJalrXUtnFEMI"},
-	{"slack bot", "xo"+"xb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx", "123456789012"},
-	{"slack app", "xa"+"pp-1-A0123456789-1234567890-abcdef0123456789", "A0123456789"},
+	{"slack bot", "xo" + "xb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx", "123456789012"},
+	{"slack app", "xa" + "pp-1-A0123456789-1234567890-abcdef0123456789", "A0123456789"},
 	{"slack webhook", "https://hooks.sl" + "ack.com/services/T00000000/B00000000/" + strings.Repeat("X", 24), "T00000000"},
-	{"jwt", "ey"+"JhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."+"eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ."+"SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c", "SflKxwRJSMeKKF2QT4fw"},
+	{"jwt", "ey" + "JhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ." + "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c", "SflKxwRJSMeKKF2QT4fw"},
 	{"google api", "AI" + "zaSyA-1234567890abcdefghijklmnopqrstuv", "1234567890abcdefghij"},
 	{"stripe", "sk_live_" + strings.Repeat("aB3dE5", 5), "aB3dE5aB3dE5"},
 	{"sendgrid", "S" + "G.abcdefghijklmnopqrstuv." + "abcdefghijklmnopqrstuvwxyz" + "0123456789ABCDEFG", "abcdefghijklmnopqrstuv"},
@@ -99,7 +99,7 @@ func TestRedactSecrets_NoFalsePositives(t *testing.T) {
 }
 
 func TestRedactSecrets_MultipleAndIdempotent(t *testing.T) {
-	in := "a AK"+"IAIOSFODNN7EXAMPLE b password=hunter2hunter2 c sk-proj-AbCdEfGhIjKlMnOpQrStUvWx0123456789"
+	in := "a AK" + "IAIOSFODNN7EXAMPLE b password=hunter2hunter2 c sk-proj-AbCdEfGhIjKlMnOpQrStUvWx0123456789"
 	once := RedactSecrets(in)
 	if strings.Count(once, "[REDACTED]") != 3 {
 		t.Errorf("want 3 redactions: %q", once)
