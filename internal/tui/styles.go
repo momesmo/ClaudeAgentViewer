@@ -78,3 +78,6 @@ var (
 			PaddingLeft(1).
 			MarginBottom(1)
 )
+
+// matchHintStyle dims the "[content]" search-match hint.
+var matchHintStyle = lipgloss.NewStyle().Foreground(colorMuted)
