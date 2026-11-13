@@ -79,7 +79,7 @@ A blazing-fast terminal UI for browsing, searching, and monitoring your Claude C
 - **Live log tailing** (`l`) — stream transcript in real-time for active sessions
 - **Async everything** — all loading happens in background, UI never blocks
 - **Privacy mode** — auto-redacts API keys, tokens, and secrets (on by default)
-- **Search** — filter sessions by prompt text, session ID, project path, or conversation content (prompts and assistant replies; matches only in content are tagged `[content]`)
+- **Search** (`/`) — case-insensitive substring filter over prompt text, session ID, project path, agent name/title, and conversation content (prompts, assistant replies, tool names, git branch, model; matches found only in content are tagged `[content]`). Content is indexed in the background, so metadata matches work instantly and content matches appear as indexing finishes.
 - **Session resume** — press `r` to launch `claude --resume <id>` directly
 - **State preservation** — `Ctrl+R` refresh keeps your expanded folders, cursor, and flags
 
@@ -92,7 +92,7 @@ go build -o claudevu.exe .
 ./claudevu.exe
 ```
 
-Requires Go 1.22+.
+Requires Go 1.26+ (see `go.mod`).
 
 ## Index cache (opt-in)
 
@@ -121,7 +121,7 @@ By default the content search index is built in memory only. To persist it betwe
 | `f` | Flag/unflag session for live monitoring |
 | `d` | Usage dashboard (aggregated stats across all sessions) |
 | `Tab` / `Shift+Tab` | Switch between tree and detail panes |
-| `/` | Fuzzy search sessions |
+| `/` | Search sessions (prompt text, ID, project, agent name/title, and conversation content) |
 | `c` | Copy session ID to clipboard |
 | `r` | Resume session (`claude --resume`) |
 | `t` | Toggle thinking block visibility |
@@ -139,7 +139,7 @@ claudevu reads Claude Code's local session data:
 - `~/.claude/projects/[project]/[sessionId].jsonl` — full transcripts
 - `~/.claude/projects/[project]/[sessionId]/subagents/` — subagent data
 
-No data leaves your machine. Everything is read-only, except the optional index cache (see "Index cache (opt-in)" below).
+No data leaves your machine. Everything is read-only, except the optional index cache (see "Index cache (opt-in)" above).
 
 ### Cost Calculation
 
@@ -170,7 +170,7 @@ Energy and CO2 estimates use the following methodology:
 
 | Layer | Tool |
 |-------|------|
-| Language | Go 1.22+ |
+| Language | Go 1.26+ |
 | TUI | [Bubble Tea](https://github.com/charmbracelet/bubbletea) (Charm ecosystem) |
 | Styling | [Lip Gloss](https://github.com/charmbracelet/lipgloss) |
 

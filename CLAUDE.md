@@ -19,7 +19,12 @@ go test -run TestName ./internal/tui/
 
 # Run with race detector
 go test -race ./...
+
+# Search/cache performance (rebuild vs cache load vs mtime check vs in-memory scan)
+go test ./internal/data -run xxx -bench BenchmarkIndex
 ```
+
+Note: the root-package tests (`render_test.go`, `screenshot_test.go`, ...) run against your real `~/.claude`, so their results depend on your local session data.
 
 ## Architecture
 
@@ -34,10 +39,10 @@ go test -race ./...
 - `types.go` — shared structs (`SessionInfo`, `SessionStats`, `SubagentInfo`, `ProjectGroup`)
 - `pricing.go` — per-model token rates; `ComputeStats` applies them to produce cost + energy metrics
 - `dashboard.go` — `BuildDashboard` aggregates stats across all sessions for the `d` view
-- `privacy.go` — regex-based redaction applied in `message_render.go`
-- `searchblob.go` — `BuildIndexEntry`: per-session lowercase content blob (prompts, assistant text, tool names) capped at `MaxBlobBytes`
+- `privacy.go` — regex-based secret redaction (`RedactSecrets` for display in `message_render.go`; `RedactSecretsFold` for lowercased search blobs before they are written to the index cache). Best-effort; rules carry lowercase `hints` that skip regexes cheaply, and must not use uppercase regex escapes (`TestRedactRulesFoldSafe`)
+- `searchblob.go` — `BuildIndexEntry`: per-session lowercase content blob (prompts, assistant text, tool names, git branch, model; not thinking or tool results) capped at `MaxBlobBytes`; skips re-reading a file whose mod-time is unchanged
 - `searchmatch.go` — `MatchSession` / `FillSearchMeta`: metadata vs content matching
-- `indexstore.go` — opt-in on-disk index cache (`LoadIndex`/`SaveIndex`/`ClearIndex`), redacted, never under `~/.claude`
+- `indexstore.go` — opt-in on-disk index cache (`LoadIndex`/`SaveIndex`/`ClearIndex`): gob file, atomic temp+rename, mode 0600, secrets redacted on save (redaction results cached per session/mod-time), `PathInside` guard keeps it out of `~/.claude`. Bump `IndexVersion` whenever blob contents or redaction rules change
 - `quickstats.go` — lightweight scan that counts tokens without parsing full message content
 
 **TUI layer** (`internal/tui/`):
@@ -50,5 +55,7 @@ go test -race ./...
 - `watcher.go` — live-tail: polls session file mod-time on a ticker, emits `sessionChangedMsg`
 
 **Key data flow**: `LoadHistory` → `buildListItems` builds the flat `[]listItem` slice the list renders from. Expanding a session calls `ScanSubagents` (sync/cheap) plus `loadQuickStatsCmd` (async). Pressing `l` triggers `loadTranscriptCmd` (async, heavier) and enables the live-tail watcher.
+
+**Search flow**: `buildListItems` lowercases the filter once and calls `data.MatchSession` once per session (precomputed `SessionInfo.SearchMeta` first, then the content blob from `Model.searchIndex`, keyed by session ID). `Init`, Ctrl+R and live-tail changes run `loadSearchIndexCmd` (worker pool, returns only new/changed entries as `SearchIndexLoadedMsg`; the model is only mutated in `Update`). With the cache enabled, `NewModel` seeds `searchIndex` from `LoadIndex`, and each `SearchIndexLoadedMsg` triggers a `saveIndexCmd` on a copy of the index; saves are coalesced (`saveInFlight`/`saveDirty`, cleared by `IndexSaveDoneMsg`).
 
 **Resume flow**: `keys.Resume` (`r`) sets `confirmResume = true`. A `y` keypress sets `m.ResumeSessionID` + `m.ResumeProjectDir` and calls `tea.Quit`. `main.go` then runs `claude --resume <id>` with `cmd.Dir` set to the session's original project directory — the TUI must fully exit before Claude CLI takes over the terminal.
