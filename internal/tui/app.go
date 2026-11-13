@@ -1061,11 +1061,17 @@ func (m Model) renderList(width, height int) string {
 				}
 			}
 
-			display := truncate(s.Display, width-24-len(badge))
+			const contentHint = " [content]"
+			maxDisp := width - 24 - len(badge)
+			if item.matchKind == data.MatchContent {
+				maxDisp -= len(contentHint) // reserve room so the row never wraps
+			}
+			display := truncate(s.Display, maxDisp)
 			line := fmt.Sprintf(" %s%s %s %s%s", flag, arrow, ts, display, badge)
 			if item.matchKind == data.MatchContent {
 				if selected {
-					line += " [content]"
+					// plain text: selectedStyle supplies colors; nested ANSI would reset them
+					line += contentHint
 				} else {
 					line += " " + matchHintStyle.Render("[content]")
 				}
@@ -1312,7 +1318,7 @@ func (m Model) renderHelp() string {
 		{"f", "Flag/unflag session for monitoring (auto-refresh)"},
 		{"Tab", "Switch focus to next pane"},
 		{"Shift+Tab", "Switch focus to previous pane"},
-		{"/", "Start fuzzy search"},
+		{"/", "Search sessions (metadata and conversation content)"},
 		{"Esc", "Cancel search / Close help"},
 		{"c", "Copy session ID to clipboard"},
 		{"r", "Resume session (launches claude --resume)"},

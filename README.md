@@ -79,7 +79,7 @@ A blazing-fast terminal UI for browsing, searching, and monitoring your Claude C
 - **Live log tailing** (`l`) — stream transcript in real-time for active sessions
 - **Async everything** — all loading happens in background, UI never blocks
 - **Privacy mode** — auto-redacts API keys, tokens, and secrets (on by default)
-- **Fuzzy search** — filter sessions by prompt text, session ID, or project path
+- **Search** — filter sessions by prompt text, session ID, project path, or conversation content (prompts and assistant replies; matches only in content are tagged `[content]`)
 - **Session resume** — press `r` to launch `claude --resume <id>` directly
 - **State preservation** — `Ctrl+R` refresh keeps your expanded folders, cursor, and flags
 
@@ -133,7 +133,7 @@ claudevu reads Claude Code's local session data:
 - `~/.claude/projects/[project]/[sessionId].jsonl` — full transcripts
 - `~/.claude/projects/[project]/[sessionId]/subagents/` — subagent data
 
-No data leaves your machine. Everything is read-only, except the optional index cache described below.
+No data leaves your machine. Everything is read-only, except the optional index cache (see "Index cache (opt-in)" below).
 
 ### Cost Calculation
 

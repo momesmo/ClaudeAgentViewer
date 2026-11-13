@@ -58,6 +58,19 @@ func main() {
 		}
 	}
 
+	if cacheDir != "" {
+		if home, herr := os.UserHomeDir(); herr == nil && data.PathInside(cacheDir, filepath.Join(home, ".claude")) {
+			if clearCache {
+				fmt.Fprintf(os.Stderr, "Error: refusing cache dir %s inside ~/.claude\n", cacheDir)
+				os.Exit(1)
+			}
+			if enableCache {
+				fmt.Fprintf(os.Stderr, "Warning: cache dir %s is inside ~/.claude; index cache disabled\n", cacheDir)
+				enableCache = false
+			}
+		}
+	}
+
 	if clearCache {
 		path := data.IndexPath(cacheDir)
 		removed, err := data.ClearIndex(cacheDir)

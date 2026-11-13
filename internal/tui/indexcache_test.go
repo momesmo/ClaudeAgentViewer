@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"github.com/charmbracelet/lipgloss"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,5 +71,29 @@ func TestUpdate_IndexLoaded_CoalescesSaves(t *testing.T) {
 	m = r.(Model)
 	if _, cmd = m.Update(IndexSaveDoneMsg{}); cmd != nil {
 		t.Fatal("no further save expected")
+	}
+}
+
+func TestRenderList_ContentRowSingleLine(t *testing.T) {
+	long := strings.Repeat("very long prompt text ", 20)
+	s := data.SessionInfo{SessionID: "s1", Display: long}
+	s.FillSearchMeta()
+	m := Model{
+		groups:      []data.ProjectGroup{{Project: "p", Expanded: true, Sessions: []data.SessionInfo{s}}},
+		searchIndex: map[string]data.IndexEntry{"s1": {Blob: "zzz needle zzz"}},
+	}
+	m.buildListItems("needle")
+	for _, cur := range []int{1, 0} {
+		m.listCursor = cur
+		m.focus = focusList
+		out := m.renderList(50, 10)
+		for i, line := range strings.Split(out, "\n") {
+			if lipgloss.Width(line) > 50 {
+				t.Errorf("cursor %d line %d too wide: %d", cur, i, lipgloss.Width(line))
+			}
+		}
+		if n := strings.Count(out, "\n"); n > 4 {
+			t.Errorf("cursor %d: expected few lines, got %d", cur, n+1)
+		}
 	}
 }

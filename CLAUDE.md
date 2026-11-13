@@ -25,7 +25,7 @@ go test -race ./...
 
 `claudevu` is a Bubble Tea TUI that reads Claude Code's local session data from `~/.claude/` — no writes (except the opt-in index cache under the user cache dir, never `~/.claude/`), no network.
 
-**Entry point** (`main.go`): Starts the Bubble Tea program, then after the TUI exits checks `m.ResumeSessionID` — if set, execs `claude --resume <id>`. Resume is the only side-effect the TUI triggers on the host.
+**Entry point** (`main.go`): Starts the Bubble Tea program, then after the TUI exits checks `m.ResumeSessionID` — if set, execs `claude --resume <id>`. Resume is the only side-effect the TUI triggers on the host, apart from the opt-in index cache (`--index-cache`, `--clear-cache`, `--cache-dir`, `CLAUDEVU_INDEX_CACHE`), which writes under the user cache dir.
 
 **Data layer** (`internal/data/`):
 - `history.go` — parses `~/.claude/history.jsonl` into `[]ProjectGroup`
@@ -35,10 +35,15 @@ go test -race ./...
 - `pricing.go` — per-model token rates; `ComputeStats` applies them to produce cost + energy metrics
 - `dashboard.go` — `BuildDashboard` aggregates stats across all sessions for the `d` view
 - `privacy.go` — regex-based redaction applied in `message_render.go`
+- `searchblob.go` — `BuildIndexEntry`: per-session lowercase content blob (prompts, assistant text, tool names) capped at `MaxBlobBytes`
+- `searchmatch.go` — `MatchSession` / `FillSearchMeta`: metadata vs content matching
+- `indexstore.go` — opt-in on-disk index cache (`LoadIndex`/`SaveIndex`/`ClearIndex`), redacted, never under `~/.claude`
 - `quickstats.go` — lightweight scan that counts tokens without parsing full message content
 
 **TUI layer** (`internal/tui/`):
 - `app.go` — the entire Bubble Tea `Model` / `Update` / `View` cycle. The model is a 3-level tree (Project → Session → Subagent). All data loading is async via `tea.Cmd` returning typed messages (`QuickStatsLoadedMsg`, `TranscriptLoadedMsg`, etc.).
+- `searchindex.go` — `loadSearchIndexCmd` builds the content index in the background (`SearchIndexLoadedMsg`)
+- `options.go` — `Options` and `ResolveIndexCache` (flag/env resolution)
 - `keys.go` — centralized key bindings; all key handling in `app.go` uses `key.Matches()` against this map.
 - `message_render.go` — renders individual JSONL messages (user/assistant/tool) into styled strings
 - `styles.go` — all Lip Gloss styles in one place

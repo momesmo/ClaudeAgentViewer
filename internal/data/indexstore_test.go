@@ -2,6 +2,7 @@ package data
 
 import (
 	"encoding/gob"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,5 +94,68 @@ func TestClearIndex(t *testing.T) {
 	}
 	if r, err := ClearIndex(dir); r || err != nil {
 		t.Fatal(r, err)
+	}
+}
+
+func TestSaveIndex_DoesNotChmodExistingDir(t *testing.T) {
+	dir := t.TempDir()
+	os.Chmod(dir, 0o755)
+	SaveIndex(dir, "c", map[string]IndexEntry{"a": {Blob: "x"}})
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o755 {
+		t.Errorf("existing dir mode changed: %v", fi.Mode())
+	}
+	nd := filepath.Join(t.TempDir(), "new")
+	SaveIndex(nd, "c", map[string]IndexEntry{"a": {Blob: "x"}})
+	if fi, _ := os.Stat(nd); fi.Mode().Perm() != 0o700 {
+		t.Errorf("new dir mode: %v", fi.Mode())
+	}
+}
+
+func TestTmpSweep(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "search-index-123.tmp")
+	os.WriteFile(stale, []byte("x"), 0o600)
+	if r, err := ClearIndex(dir); !r || err != nil {
+		t.Fatal(r, err)
+	}
+	os.WriteFile(stale, []byte("x"), 0o600)
+	SaveIndex(dir, "c", map[string]IndexEntry{"a": {Blob: "x"}})
+	if _, err := os.Stat(stale); err == nil {
+		t.Error("stale tmp not swept by SaveIndex")
+	}
+}
+
+func TestPathInside(t *testing.T) {
+	base := t.TempDir()
+	cd := filepath.Join(base, ".claude")
+	cases := []struct {
+		p    string
+		want bool
+	}{
+		{cd, true},
+		{filepath.Join(cd, "cache", "x"), true},
+		{filepath.Join(base, ".claude-foo"), false},
+		{filepath.Join(base, "other"), false},
+		{base, false},
+	}
+	for _, c := range cases {
+		if got := PathInside(c.p, cd); got != c.want {
+			t.Errorf("%s: got %v", c.p, got)
+		}
+	}
+}
+
+func TestSaveIndex_RedactionFast(t *testing.T) {
+	blob := strings.Repeat("lorem ipsum dolor sit amet ", 1600)[:40*1024]
+	idx := map[string]IndexEntry{}
+	for i := 0; i < 1000; i++ {
+		idx[fmt.Sprint(i)] = IndexEntry{Blob: blob}
+	}
+	start := time.Now()
+	for _, e := range idx {
+		RedactSecretsFold(e.Blob)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("redaction too slow: %v", d)
 	}
 }

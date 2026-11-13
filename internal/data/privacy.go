@@ -1,6 +1,9 @@
 package data
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 var secretPatterns []*regexp.Regexp
 var secretPatternsFold []*regexp.Regexp
@@ -19,7 +22,7 @@ func init() {
 	}
 	for _, p := range patterns {
 		secretPatterns = append(secretPatterns, regexp.MustCompile(p))
-		secretPatternsFold = append(secretPatternsFold, regexp.MustCompile("(?i)"+p))
+		secretPatternsFold = append(secretPatternsFold, regexp.MustCompile(lowerPattern(p)))
 	}
 }
 
@@ -39,3 +42,8 @@ func RedactSecretsFold(text string) string {
 	}
 	return text
 }
+
+// lowerPattern lowercases a pattern's literals and character classes so it
+// matches already-lowercased text without (?i), which would disable Go's
+// literal-prefix fast path. Only the escape-free patterns above are supported.
+func lowerPattern(p string) string { return strings.ToLower(p) }

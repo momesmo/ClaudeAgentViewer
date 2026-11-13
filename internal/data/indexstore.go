@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // IndexVersion must be bumped whenever blob contents or MaxBlobBytes change.
-const IndexVersion = 1
+const IndexVersion = 2
 
 type indexHeader struct {
 	Version   int
@@ -56,7 +57,7 @@ func SaveIndex(cacheDir, claudeDir string, idx map[string]IndexEntry) error {
 	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
 		return err
 	}
-	_ = os.Chmod(cacheDir, 0o700)
+	sweepTmp(cacheDir)
 	red := make(map[string]IndexEntry, len(idx))
 	for k, e := range idx {
 		e.Blob = RedactSecretsFold(e.Blob)
@@ -94,12 +95,54 @@ func SaveIndex(cacheDir, claudeDir string, idx map[string]IndexEntry) error {
 
 // ClearIndex deletes the cache file; a missing file is not an error.
 func ClearIndex(cacheDir string) (bool, error) {
+	removed := sweepTmp(cacheDir)
 	err := os.Remove(indexPath(cacheDir))
 	if err == nil {
 		return true, nil
 	}
 	if os.IsNotExist(err) {
-		return false, nil
+		return removed, nil
 	}
-	return false, err
+	return removed, err
+}
+
+// sweepTmp removes stale search-index-*.tmp files left by interrupted saves.
+func sweepTmp(cacheDir string) bool {
+	matches, _ := filepath.Glob(filepath.Join(cacheDir, "search-index-*.tmp"))
+	any := false
+	for _, f := range matches {
+		if os.Remove(f) == nil {
+			any = true
+		}
+	}
+	return any
+}
+
+// PathInside reports whether path is dir itself or lies beneath it
+// (symlinks resolved where possible).
+func PathInside(path, dir string) bool {
+	clean := func(p string) string {
+		a, err := filepath.Abs(p)
+		if err != nil {
+			a = filepath.Clean(p)
+		}
+		// resolve the longest existing prefix
+		cur, rest := a, ""
+		for {
+			if r, err := filepath.EvalSymlinks(cur); err == nil {
+				return filepath.Join(r, rest)
+			}
+			parent := filepath.Dir(cur)
+			if parent == cur {
+				return a
+			}
+			rest = filepath.Join(filepath.Base(cur), rest)
+			cur = parent
+		}
+	}
+	rel, err := filepath.Rel(clean(dir), clean(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
