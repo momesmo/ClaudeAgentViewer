@@ -55,8 +55,9 @@ func LoadHistory(claudeDir string) ([]ProjectGroup, error) {
 		if path != "" {
 			info.FilePath = path
 			info.AgentName, info.CustomTitle = ScanSessionMeta(path)
-			seen[id] = info
 		}
+		info.FillSearchMeta()
+		seen[id] = info
 	}
 
 	// Group by project
