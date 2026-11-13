@@ -37,6 +37,7 @@ type listItem struct {
 	projectIndex int
 	sessionIndex int
 	subagentIdx  int // index into sessionSubagents map
+	matchKind    data.MatchKind
 }
 
 type itemKind int
@@ -54,6 +55,7 @@ type sessionKey struct {
 
 type Model struct {
 	groups    []data.ProjectGroup
+	searchIndex map[string]data.IndexEntry
 	claudeDir string
 	width     int
 	height    int
@@ -148,6 +150,7 @@ func NewModel(claudeDir string) Model {
 
 	m := Model{
 		claudeDir:        claudeDir,
+		searchIndex:      make(map[string]data.IndexEntry),
 		showThinking:     false,
 		privacyMode:      true,
 		searchInput:      ti,
@@ -178,17 +181,12 @@ func (m *Model) buildListItems(filter string) {
 	filter = strings.ToLower(filter)
 	m.listItems = nil
 	for pi, g := range m.groups {
+		kinds := make([]data.MatchKind, len(g.Sessions))
 		hasMatch := filter == ""
-		if !hasMatch {
-			for _, s := range g.Sessions {
-				if strings.Contains(strings.ToLower(s.Display), filter) ||
-					strings.Contains(strings.ToLower(s.SessionID), filter) ||
-					strings.Contains(strings.ToLower(g.Project), filter) ||
-					strings.Contains(strings.ToLower(s.AgentName), filter) ||
-					strings.Contains(strings.ToLower(s.CustomTitle), filter) {
-					hasMatch = true
-					break
-				}
+		for si, s := range g.Sessions {
+			kinds[si] = data.MatchSession(s, m.searchIndex[s.SessionID].Blob, filter)
+			if kinds[si] != data.MatchNone {
+				hasMatch = true
 			}
 		}
 		if !hasMatch {
@@ -197,15 +195,11 @@ func (m *Model) buildListItems(filter string) {
 
 		m.listItems = append(m.listItems, listItem{kind: itemProject, projectIndex: pi})
 		if g.Expanded {
-			for si, s := range g.Sessions {
-				if filter != "" &&
-					!strings.Contains(strings.ToLower(s.Display), filter) &&
-					!strings.Contains(strings.ToLower(s.SessionID), filter) &&
-					!strings.Contains(strings.ToLower(s.AgentName), filter) &&
-					!strings.Contains(strings.ToLower(s.CustomTitle), filter) {
+			for si := range g.Sessions {
+				if kinds[si] == data.MatchNone {
 					continue
 				}
-				m.listItems = append(m.listItems, listItem{kind: itemSession, projectIndex: pi, sessionIndex: si})
+				m.listItems = append(m.listItems, listItem{kind: itemSession, projectIndex: pi, sessionIndex: si, matchKind: kinds[si]})
 
 				// If session is expanded, show its subagents
 				sk := sessionKey{pi, si}
@@ -1032,6 +1026,13 @@ func (m Model) renderList(width, height int) string {
 
 			display := truncate(s.Display, width-24-len(badge))
 			line := fmt.Sprintf(" %s%s %s %s%s", flag, arrow, ts, display, badge)
+			if item.matchKind == data.MatchContent {
+				if selected {
+					line += " [content]"
+				} else {
+					line += " " + matchHintStyle.Render("[content]")
+				}
+			}
 
 			if selected {
 				sb.WriteString(selectedStyle.Width(width - 2).Render(line))
