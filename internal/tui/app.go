@@ -1428,6 +1428,9 @@ func (m Model) renderDashboard() string {
 // Utilities
 
 func truncate(s string, max int) string {
+	if max < 0 {
+		max = 0 // a negative width (long badge in a narrow pane) must not panic
+	}
 	if len(s) <= max {
 		return s
 	}
