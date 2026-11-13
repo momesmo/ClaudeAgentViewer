@@ -11,7 +11,7 @@ import (
 )
 
 // IndexVersion must be bumped whenever blob contents or MaxBlobBytes change.
-const IndexVersion = 3
+const IndexVersion = 4
 
 type indexHeader struct {
 	Version   int
