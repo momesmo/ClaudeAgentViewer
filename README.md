@@ -149,7 +149,8 @@ Costs come from a price table built from Anthropic's published rates (embedded i
 - A `~` before a cost means some model was priced by family because its exact version isn't in the table; a `+` means some tokens belong to a model with **no known price** and are not included (the detail pane names it).
 - `claudevu --update-pricing` fetches the current prices once (the only network use), shows what changed, and exits. Large price swings are refused until you review them and pass `--accept-price-changes`.
 - `--pricing-auto` / `CLAUDEVU_PRICING_AUTO=1` opts in to a background refresh, at most once a day, when a model without an exact price shows up.
-- You can override or add prices in `<user config dir>/claudevu/pricing-overrides.json`.
+- You can override or add prices in `<user config dir>/claudevu/pricing-overrides.json` (on macOS: `~/Library/Application Support/claudevu/`).
+- `claudevu --pricing-info` explains where every price comes from, lists any problems (with fixes), shows the refresh policy and how each model in your sessions is priced. It is read-only and offline.
 
 Details, safety rules and file formats: [docs/pricing.md](docs/pricing.md).
 

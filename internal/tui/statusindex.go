@@ -180,7 +180,7 @@ func (m Model) pricingSegment() statusSeg {
 	plains := []string{full, "Prices: " + asOf}
 	if n := len(info.Problems); n > 0 {
 		full += " ⚠ " + plural(n, "problem")
-		plains = []string{full, "Prices ⚠"}
+		plains = []string{full + " (claudevu --pricing-info)", full, "Prices ⚠"}
 		style = toolLabelStyle
 	}
 	return statusSeg{plains: plains, style: style}

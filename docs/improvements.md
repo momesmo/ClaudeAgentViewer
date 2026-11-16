@@ -88,6 +88,7 @@ _Last updated: 2026-11-16_
 - [ ] **R-34 (M, S) "Messages" count means transcript lines, not API messages.** The Activity > Messages figure still counts every assistant transcript line (one per content block). Decide whether to show API messages, conversation turns, or both.
 - [ ] **R-35 (L, S) Concurrent price refreshes.** Two claudevu processes can both fetch and race on the attempt-state file (files never tear; one attempt count may be lost). An advisory lock would serialize them.
 - [ ] **R-36 (L, S) Pricing file housekeeping.** Temp files from a crashed pricing write are not swept; an existing cache directory with looser permissions is not tightened; the directory is not fsynced after rename.
+- [x] **R-39 `--pricing-info`** (2026-11-16): explains layers, problems with fixes, per-model provenance, policy and how your models are priced.
 - [ ] **R-37 (M, S) Show what a price refresh changed in the TUI.** `--update-pricing` prints the changes; the background refresh only says "prices updated (N changed)". Add a view (or a log line in the detail pane) listing them.
 - [ ] **R-38 (L, S) Subagent transcripts are not priced separately.** Subagent sessions are read via their own transcript files; check that their cost is rolled into the parent session total and shown.
 

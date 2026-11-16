@@ -1661,7 +1661,7 @@ type PricingRefreshedMsg struct {
 	Err error
 }
 
-const pricingCooldown = 24 * time.Hour
+const pricingCooldown = data.PricingCooldown
 
 // needsPricing reports whether a session used a model that has no exact price
 // (priced by family estimate, or not priced at all).

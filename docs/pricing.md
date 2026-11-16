@@ -58,6 +58,30 @@ is not a problem. An override for a model that has a long-context tier (Claude
 Haiku 5.5) keeps that tier unless you supply your own, so long prompts are not
 silently under-priced.
 
+## Seeing where prices come from: `claudevu --pricing-info`
+
+Read-only and offline (it never uses the network and writes nothing). It prints:
+
+- the three layers with their file paths, whether each is **in use**, its date,
+  size and model count;
+- every **problem**, one per line with a fix: a JSON syntax error with its line
+  and column, each invalid override entry (not just the first), a cache that is
+  older than the built-in table or dated in the future;
+- the **refresh policy**: whether automatic refresh is on and how it was enabled,
+  the source and allowed hosts, the last attempt and error, and when the next
+  automatic attempt is allowed;
+- how prices are applied (fast mode, US-only inference, web search, long-context
+  tiers, cache TTLs) and which layer each multiplier comes from;
+- the **price of every model** and which layer supplies it, with what changed
+  compared with the layer below;
+- every model found in **your sessions**, with its message count and cost, and
+  how it was priced: exactly, after stripping a date or provider prefix,
+  estimated from the nearest known version (`~`), or not priced.
+
+The exit code is 0 when everything is fine and 2 when problems were found, so it
+can be used in scripts. The TUI status bar shows `⚠ N problem(s)` when there are
+problems and points here.
+
 ## How costs are computed
 
 - Each API message is counted **once**. Claude Code writes one transcript line

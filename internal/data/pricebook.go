@@ -169,11 +169,12 @@ func between(v, lo, hi float64) bool { return !math.IsNaN(v) && v >= lo && v <= 
 func validateRate(what string, r Rate) error {
 	for name, v := range map[string]float64{"input": r.Input, "cacheWrite5m": r.CacheWrite5m, "cacheWrite1h": r.CacheWrite1h, "cacheRead": r.CacheRead, "output": r.Output} {
 		if math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 || v > maxSanePrice {
-			return fmt.Errorf("pricing: %s: %s price %v is not plausible", what, name, v)
+			return fmt.Errorf("pricing: %s: %s price %v must be above 0 and at most $%g per million tokens", what, name, v, maxSanePrice)
 		}
 	}
 	if r.CacheWrite1h < r.CacheWrite5m || r.CacheWrite5m < r.Input || r.CacheRead > r.Input {
-		return fmt.Errorf("pricing: %s: cache prices are inconsistent with the input price (%+v)", what, r)
+		return fmt.Errorf("pricing: %s: cache prices must satisfy 1h write >= 5m write >= input, and cache read <= input (got input %s, 5m write %s, 1h write %s, cache read %s)",
+			what, money(r.Input), money(r.CacheWrite5m), money(r.CacheWrite1h), money(r.CacheRead))
 	}
 	return nil
 }

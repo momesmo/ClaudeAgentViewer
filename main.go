@@ -24,6 +24,7 @@ func main() {
 		cacheDirArg string
 
 		updatePricing bool
+		pricingInfo   bool
 		pricingAuto   bool
 		pricingSource string
 		acceptChanges bool
@@ -34,6 +35,7 @@ func main() {
 	flag.BoolVar(&clearCache, "clear-cache", false, "Delete the on-disk index cache and exit")
 	flag.StringVar(&cacheDirArg, "cache-dir", "", "Cache directory (default: user cache dir/claudevu)")
 	flag.BoolVar(&updatePricing, "update-pricing", false, "Fetch the current model prices once (network), print what changed, and exit")
+	flag.BoolVar(&pricingInfo, "pricing-info", false, "Explain where each price comes from, list any pricing problems, and show how the models in your sessions are priced (no network), then exit")
 	flag.BoolVar(&pricingAuto, "pricing-auto", false, "Opt in to refreshing prices automatically (network, at most once a day) when a model has no exact price (also CLAUDEVU_PRICING_AUTO=1)")
 	flag.StringVar(&pricingSource, "pricing-source", "", "Pricing page URL (https; default: Anthropic's published pricing page)")
 	flag.BoolVar(&acceptChanges, "accept-price-changes", false, "With --update-pricing: apply price changes larger than 3x after you have reviewed them")
@@ -132,6 +134,17 @@ func main() {
 	data.SetDefaultBook(book)
 	autoPricing := tui.ResolveIndexCache(pricingAutoSet, pricingAuto, os.Getenv("CLAUDEVU_PRICING_AUTO"))
 
+	if pricingInfo {
+		policy := data.PricingPolicy{Auto: autoPricing && pricingDir != "", URL: fetchOpts.URL, AllowHosts: fetchOpts.AllowHosts}
+		if policy.Auto {
+			policy.AutoVia = "CLAUDEVU_PRICING_AUTO"
+			if pricingAutoSet {
+				policy.AutoVia = "--pricing-auto"
+			}
+		}
+		os.Exit(runPricingInfo(pricingDir, configDir, policy))
+	}
+
 	// Determine Claude directory
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -206,6 +219,34 @@ func runUpdatePricing(cacheDir, configDir string, o data.FetchOptions, accept bo
 	fmt.Printf("Updated prices (%d models, as of %s). %d changed or new:\n", len(res.Book.Models), res.Book.AsOf, len(res.Changes))
 	for _, c := range res.Changes {
 		fmt.Printf("  %s\n", c)
+	}
+	return 0
+}
+
+// runPricingInfo prints the pricing report (--pricing-info). It never uses the
+// network and writes nothing. It returns the process exit code.
+func runPricingInfo(cacheDir, configDir string, policy data.PricingPolicy) int {
+	report := data.ExplainPricing(cacheDir, configDir, policy, time.Now())
+	data.SetDefaultBook(report.Book) // so scanned sessions are costed with the layered prices
+
+	// How the models in your own sessions are priced (skipped if there are none).
+	if home, err := os.UserHomeDir(); err == nil {
+		claudeDir := filepath.Join(home, ".claude")
+		if groups, herr := data.LoadHistory(claudeDir); herr == nil {
+			var paths []string
+			for _, g := range groups {
+				for _, s := range g.Sessions {
+					if s.FilePath != "" {
+						paths = append(paths, s.FilePath)
+					}
+				}
+			}
+			report.Usage = data.ScanModelUsage(paths, report.Book)
+		}
+	}
+	fmt.Print(report.Text())
+	if len(report.Problems) > 0 {
+		return 2 // distinguish "problems found" for scripts
 	}
 	return 0
 }
