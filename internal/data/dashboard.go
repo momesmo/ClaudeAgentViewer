@@ -4,11 +4,11 @@ import "sort"
 
 // DashboardData holds aggregated stats across all sessions
 type DashboardData struct {
-	TotalSessions int
-	TotalTokens   int
-	TotalCost     float64
-	TotalCO2g     float64
-	TotalTreeDays float64
+	TotalSessions  int
+	TotalTokens    int
+	TotalCost      float64
+	TotalCO2g      float64
+	TotalTreeDays  float64
 	TotalEnergyKWh float64
 
 	// Cost trust: see SessionStats. TotalCost excludes unpriced models.

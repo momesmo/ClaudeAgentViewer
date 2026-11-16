@@ -45,7 +45,7 @@ type listItem struct {
 type itemKind int
 
 const (
-	itemProject  itemKind = iota
+	itemProject itemKind = iota
 	itemSession
 	itemSubagent
 )
@@ -56,11 +56,11 @@ type sessionKey struct {
 }
 
 type Model struct {
-	groups    []data.ProjectGroup
-	claudeDir string
-	width     int
-	height    int
-	focus     focus
+	groups       []data.ProjectGroup
+	claudeDir    string
+	width        int
+	height       int
+	focus        focus
 	currentView  view
 	showThinking bool
 	privacyMode  bool
@@ -80,11 +80,11 @@ type Model struct {
 	// Detail pane
 	transcript   []data.SessionMessage
 	stats        data.SessionStats
-	selectedInfo *data.SessionInfo    // set when viewing a session
-	selectedSub  *data.SubagentInfo   // set when viewing a subagent
+	selectedInfo *data.SessionInfo  // set when viewing a session
+	selectedSub  *data.SubagentInfo // set when viewing a subagent
 	detailScroll int
-	loading      bool   // true while transcript loads async
-	showLogs     bool   // false = metadata view, true = transcript view
+	loading      bool // true while transcript loads async
+	showLogs     bool // false = metadata view, true = transcript view
 
 	// Confirm resume
 	confirmResume bool
@@ -100,7 +100,7 @@ type Model struct {
 	liveWatching    bool
 
 	// Flagged sessions for monitoring
-	flaggedSessions map[string]bool      // sessionID -> true
+	flaggedSessions map[string]bool              // sessionID -> true
 	flaggedStats    map[string]data.SessionStats // sessionID -> latest stats
 
 	// Dashboard
@@ -109,9 +109,9 @@ type Model struct {
 	dashboardScroll  int
 
 	// Search index (content blobs keyed by session ID)
-	searchIndex map[string]data.IndexEntry
-	opts        Options
-	cacheDir    string
+	searchIndex  map[string]data.IndexEntry
+	opts         Options
+	cacheDir     string
 	saveInFlight bool
 	saveDirty    bool
 
@@ -1071,7 +1071,7 @@ func (m Model) renderMain() string {
 
 	detailBorder := lipgloss.NewStyle().
 		Width(detailWidth).Height(contentHeight).
-		MaxHeight(contentHeight + 2).
+		MaxHeight(contentHeight+2).
 		Border(lipgloss.RoundedBorder(), true, true, true, true).
 		BorderForeground(colorBorder)
 

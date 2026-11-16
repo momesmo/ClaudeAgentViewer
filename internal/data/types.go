@@ -22,7 +22,6 @@ type SessionInfo struct {
 	SearchMeta  string // lowercase metadata joined by \x00; see FillSearchMeta
 }
 
-
 // SessionMessage represents a parsed message from a session JSONL file
 type SessionMessage struct {
 	Type      string
@@ -81,9 +80,9 @@ type SessionStats struct {
 	PricingAsOf    string       // date of the price table used
 	ModelBreakdown []ModelUsage // per-model messages, tokens and cost
 	// Energy metrics (ccwatt-style)
-	EnergyKWh   float64 // estimated energy consumption
-	CO2Kg       float64 // estimated CO2 emissions
-	TreeDays    float64 // days of tree growth to offset
+	EnergyKWh float64 // estimated energy consumption
+	CO2Kg     float64 // estimated CO2 emissions
+	TreeDays  float64 // days of tree growth to offset
 }
 
 // ComputeEnergy calculates energy/CO2/tree-day metrics from token counts.
