@@ -24,7 +24,7 @@ go test -race ./...
 go test ./internal/data -run xxx -bench BenchmarkIndex
 ```
 
-Note: the root-package tests (`render_test.go`, `screenshot_test.go`, ...) run against your real `~/.claude`, so their results depend on your local session data.
+**Tests never touch your real `~/.claude`.** Every package's `TestMain` calls `internal/testenv`, which points HOME, USERPROFILE, XDG_*, AppData and LocalAppData at an empty temp dir. Tests use `internal/testfixture` (`BuildClaudeDir`): a fake claude dir with the real on-disk shape (one JSONL line per content block with repeated message IDs and usage, subagents, an oversized line, unknown models, fast and US-geo messages) whose expected values are derived by hand, including literal USD amounts. A test must never skip because data is missing. To profile your own data: `CLAUDEVU_TEST_REAL_CLAUDE=1 go test -run PerfProfile .`
 
 ## Architecture
 
