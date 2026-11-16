@@ -57,12 +57,8 @@ func TestPerfProfileRealData(t *testing.T) {
 	if !ok {
 		t.Skip("opt-in real-data profile: set CLAUDEVU_TEST_REAL_CLAUDE=1 to profile your own ~/.claude")
 	}
-	t.Setenv("HOME", home) // the suite isolates HOME; this test deliberately uses the real one
-	userHome, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	claudeDir := filepath.Join(userHome, ".claude")
+	// The suite isolates HOME; this is the one test that deliberately reads the real one.
+	claudeDir := filepath.Join(home, ".claude")
 
 	t0 := time.Now()
 	groups, err := data.LoadHistory(claudeDir)
