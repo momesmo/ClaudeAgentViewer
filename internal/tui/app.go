@@ -1139,9 +1139,9 @@ func (m Model) renderList(width, height int) string {
 			// Show live stats for flagged sessions
 			if m.flaggedSessions[s.SessionID] {
 				if fstats, ok := m.flaggedStats[s.SessionID]; ok {
-					badge += fmt.Sprintf(" %s $%.2f",
+					badge += fmt.Sprintf(" %s %s",
 						formatTokens(fstats.TotalInputTokens+fstats.TotalOutputTokens),
-						fstats.EstimatedCostUSD)
+						costText(fstats.EstimatedCostUSD, fstats.CostEstimated, fstats.UnpricedTokens > 0))
 				}
 			}
 
@@ -1280,7 +1280,22 @@ func (m Model) renderDetail(width, height int) string {
 
 		// Cost
 		sb.WriteString(toolLabelStyle.Render("  Cost") + "\n")
-		sb.WriteString(fmt.Sprintf("    Estimated: $%.2f\n", s.EstimatedCostUSD))
+		sb.WriteString(fmt.Sprintf("    Estimated: %s\n", costText(s.EstimatedCostUSD, s.CostEstimated, s.UnpricedTokens > 0)))
+		if len(s.ModelBreakdown) > 1 {
+			for i, mu := range s.ModelBreakdown {
+				if i >= 4 {
+					sb.WriteString(mutedStyle.Render(fmt.Sprintf("    … and %d more models", len(s.ModelBreakdown)-i)) + "\n")
+					break
+				}
+				sb.WriteString(mutedStyle.Render(fmt.Sprintf("      %-22s %s", truncate(mu.Model, 22), costText(mu.CostUSD, mu.Match == data.PriceFamily, mu.Match == data.PriceNone))) + "\n")
+			}
+		}
+		if len(s.UnpricedModels) > 0 {
+			sb.WriteString(toolLabelStyle.Render(fmt.Sprintf("    No price for %s: %s tokens not costed", strings.Join(s.UnpricedModels, ", "), formatTokens(s.UnpricedTokens))) + "\n")
+		}
+		if s.PricingAsOf != "" {
+			sb.WriteString(mutedStyle.Render("    Rates as of "+s.PricingAsOf+" (~ estimated by model family)") + "\n")
+		}
 
 		sb.WriteString("\n")
 
@@ -1449,7 +1464,14 @@ func (m Model) renderDashboard() string {
 	sb.WriteString("\n\n")
 	sb.WriteString(fmt.Sprintf("    Sessions:   %d\n", d.TotalSessions))
 	sb.WriteString(fmt.Sprintf("    Tokens:     %s\n", formatTokens(d.TotalTokens)))
-	sb.WriteString(fmt.Sprintf("    Cost:       $%.2f\n", d.TotalCost))
+	sb.WriteString(fmt.Sprintf("    Cost:       %s\n", costText(d.TotalCost, d.CostEstimated, d.UnpricedTokens > 0)))
+	if d.UnpricedTokens > 0 {
+		sb.WriteString(toolLabelStyle.Render(fmt.Sprintf("                + %s tokens from models with no price (%s) are not costed",
+			formatTokens(d.UnpricedTokens), strings.Join(d.UnpricedModels, ", "))) + "\n")
+	}
+	if d.PricingAsOf != "" {
+		sb.WriteString(mutedStyle.Render("                Rates as of "+d.PricingAsOf+"; ~ = estimated by model family, + = lower bound") + "\n")
+	}
 	sb.WriteString(fmt.Sprintf("    Energy:     %.4f kWh\n", d.TotalEnergyKWh))
 	sb.WriteString(fmt.Sprintf("    CO2:        %.1f g\n", d.TotalCO2g))
 	sb.WriteString(fmt.Sprintf("    Tree-days:  %.1f\n", d.TotalTreeDays))
@@ -1467,7 +1489,7 @@ func (m Model) renderDashboard() string {
 		}
 		sb.WriteString(fmt.Sprintf("    %-30s %8d %10s %9s %7.0fg\n",
 			project, p.Sessions, formatTokens(p.Tokens),
-			fmt.Sprintf("$%.2f", p.Cost), p.CO2g))
+			costText(p.Cost, p.Estimated, p.Unpriced), p.CO2g))
 	}
 	sb.WriteString("\n")
 
@@ -1479,7 +1501,7 @@ func (m Model) renderDashboard() string {
 	for _, ms := range d.ByModel {
 		sb.WriteString(fmt.Sprintf("    %-28s %8d %10s %9s\n",
 			ms.Model, ms.Sessions, formatTokens(ms.Tokens),
-			fmt.Sprintf("$%.2f", ms.Cost)))
+			costText(ms.Cost, ms.Estimated, ms.Unpriced)))
 	}
 	sb.WriteString("\n")
 
@@ -1487,8 +1509,8 @@ func (m Model) renderDashboard() string {
 	sb.WriteString(headerStyle.Width(m.width - 4).Render("  Top Sessions by Cost"))
 	sb.WriteString("\n\n")
 	for i, s := range d.TopCost {
-		sb.WriteString(fmt.Sprintf("    %d. $%.2f  %s  %s\n",
-			i+1, s.Cost, formatTokens(s.Tokens), s.Display))
+		sb.WriteString(fmt.Sprintf("    %d. %s  %s  %s\n",
+			i+1, costText(s.Cost, s.Estimated, s.Unpriced), formatTokens(s.Tokens), s.Display))
 		sb.WriteString(mutedStyle.Render(fmt.Sprintf("       %s  %s", s.Model, truncate(s.SessionID, 36))))
 		sb.WriteString("\n")
 	}
@@ -1590,4 +1612,21 @@ func saveIndexCmd(cacheDir, claudeDir string, idx map[string]data.IndexEntry) te
 		}
 		return msg
 	}
+}
+
+// costText formats a cost with its trust level: "~" when estimated by model
+// family, "+" when some tokens had no known price (so the figure is a lower
+// bound), and "unpriced" when nothing could be priced.
+func costText(usd float64, estimated, unpriced bool) string {
+	if usd == 0 && unpriced {
+		return "unpriced"
+	}
+	s := fmt.Sprintf("$%.2f", usd)
+	if estimated {
+		s = "~" + s
+	}
+	if unpriced {
+		s += "+"
+	}
+	return s
 }
