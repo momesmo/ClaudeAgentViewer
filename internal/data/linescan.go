@@ -8,7 +8,16 @@ import (
 // maxStatsLineBytes bounds a single transcript line when computing statistics.
 // A message can carry a very large tool result or file write, so this is far
 // above bufio.Scanner's usual limits; a line over it is skipped, never fatal.
-const maxStatsLineBytes = 32 << 20
+// It is a variable only so tests can lower it (see SetStatsLineLimitForTest).
+var maxStatsLineBytes = 32 << 20
+
+// SetStatsLineLimitForTest lowers the per-line limit used by QuickScanStats and
+// LoadTranscript and returns a function that restores it. Tests only.
+func SetStatsLineLimitForTest(n int) (restore func()) {
+	old := maxStatsLineBytes
+	maxStatsLineBytes = n
+	return func() { maxStatsLineBytes = old }
+}
 
 // lineScanner reads JSONL lines like bufio.Scanner, but a line longer than the
 // limit is skipped instead of aborting the scan. (bufio.Scanner stops at the
