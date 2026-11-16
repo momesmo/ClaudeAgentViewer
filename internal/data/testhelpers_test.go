@@ -3,6 +3,7 @@ package data
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -22,3 +23,10 @@ func parseFloatNoComma(s string) (float64, error) {
 }
 
 func trimFloat(v float64) string { return fmt.Sprintf("%g", v) }
+
+func writeTemp(t *testing.T, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	writeFile(t, p, content)
+	return p
+}
