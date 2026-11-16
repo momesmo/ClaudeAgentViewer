@@ -28,6 +28,17 @@ go test ./internal/data -run xxx -bench BenchmarkIndex
 
 **Tests never touch your real `~/.claude`.** Every package's `TestMain` calls `internal/testenv`, which points HOME, USERPROFILE, XDG_*, AppData and LocalAppData at an empty temp dir. Tests use `internal/testfixture` (`BuildClaudeDir`): a fake claude dir with the real on-disk shape (one JSONL line per content block with repeated message IDs and usage, subagents, an oversized line, unknown models, fast and US-geo messages) whose expected values are derived by hand, including literal USD amounts. A test must never skip because data is missing. To profile your own data: `CLAUDEVU_TEST_REAL_CLAUDE=1 go test -run PerfProfile .`
 
+## Working agreements (read before committing or pushing)
+
+Full detail and reasons: `docs/development.md`. The essentials:
+
+- **Identity.** All commits and pushes are the personal identity `momesmo <6090451+momesmo@users.noreply.github.com>`; the work identity must never be committed or pushed. `origin` is the personal fork `momesmo/ClaudeAgentViewer`; `upstream` is the original project and its push is deliberately disabled. The local branch `local-dev-backup-work-identity` holds old work-identity commits: never push it. The git/gh configuration that makes this work lives **outside the repo** (`~/.gitconfig`, `~/.gitconfig-personal`, `~/.zshrc`); `docs/development.md` explains how to verify and recreate it.
+- **Do not push, merge, delete branches or change GitHub settings unless the user asked.** Commit locally and report. `gh` commands against the fork need `GH_TOKEN=$(gh auth token -h github.com -u momesmo)` because the active gh account is the work one.
+- **Never bypass the ggshield pre-commit hook.** If a test string looks like a secret, split the literal (`"xo" + "xb-..."`). Never commit real session data or tokens.
+- **Backlog and decisions live in `docs/improvements.md`** (stable IDs, decision log). Update it, and the relevant docs, in the same change as the code.
+- **How work is done:** implement in a git worktree (`.claude/worktrees/`, git-ignored), get an independent review, verify claims yourself, and prove tests catch bugs by mutating the code (a mutation no test catches is a missing test).
+- **Before committing:** `go vet ./... && go test -race -count=1 ./...` and `gofmt -l $(git ls-files '*.go')` (empty). CI enforces both.
+
 ## Architecture
 
 `claudevu` is a Bubble Tea TUI that reads Claude Code's local session data from `~/.claude/` — no writes (except the opt-in index cache under the user cache dir, never `~/.claude/`), no network except the opt-in price refresh (`--update-pricing`, `--pricing-auto`).
@@ -36,10 +47,9 @@ go test ./internal/data -run xxx -bench BenchmarkIndex
 
 **Data layer** (`internal/data/`):
 - `history.go` — parses `~/.claude/history.jsonl` into `[]ProjectGroup`
-- `session.go` — `LoadTranscript` / `QuickScanStats` for a single `.jsonl` session file
+- `session.go` — `LoadTranscript` / `ComputeStats` / `FindSessionFile` for a single `.jsonl` session file
 - `subagent.go` — scans `~/.claude/projects/[proj]/[id]/subagents/` for child agents
 - `types.go` — shared structs (`SessionInfo`, `SessionStats`, `SubagentInfo`, `ProjectGroup`)
-- `pricing.go` — per-model token rates; `ComputeStats` applies them to produce cost + energy metrics
 - `dashboard.go` — `BuildDashboard` aggregates stats across all sessions for the `d` view
 - `pricebook.go` — `PriceBook` (per-model rates + modifiers), `Lookup` (exact / normalized / family fallback / none), `Cost`, `Validate`, `Merge`; embedded `pricing_table.json` (dated). `EmbeddedBook()` is the fixed baseline; `DefaultBook()`/`SetDefaultBook()` is the layered book in use
 - `usage.go` — `UsageTally`: counts each API message once (by `message.id`), prices per message by its own model, splits 5m/1h cache writes; fills `SessionStats` (cost, `CostEstimated`, `UnpricedModels`, `ModelBreakdown`). Both `ComputeStats` and `QuickScanStats` use it
@@ -50,13 +60,14 @@ go test ./internal/data -run xxx -bench BenchmarkIndex
 - `searchblob.go` — `BuildIndexEntry`: per-session lowercase content blob (prompts, assistant text, tool names; branch/model only when they change; not thinking or tool results). Capped at `MaxBlobBytes` (256 KB) as head (first `HeadBytes`=64 KB, read forward) + tail (most recent text, read backwards from EOF in `tailChunkBytes` chunks). Lines over `maxLineBytes` (1 MiB) are cut and their message text salvaged (`salvageText`); oversize tool results are ignored. Skips re-reading a file whose mod-time is unchanged. Bump `IndexVersion` when this changes
 - `searchmatch.go` — `MatchSession` / `FillSearchMeta`: metadata vs content matching
 - `indexstore.go` — opt-in on-disk index cache (`LoadIndex`/`SaveIndex`/`ClearIndex`): gob file, atomic temp+rename, mode 0600, secrets redacted on save (redaction results cached per session/mod-time), `PathInside` guard keeps it out of `~/.claude`. Bump `IndexVersion` whenever blob contents or redaction rules change
-- `quickstats.go` — lightweight scan that counts tokens without parsing full message content
+- `quickstats.go` — `QuickScanStats`: lightweight scan that counts tokens, cost and tool calls without parsing full message content; `ScanSessionMeta`
 
 **TUI layer** (`internal/tui/`):
 - `app.go` — the entire Bubble Tea `Model` / `Update` / `View` cycle. The model is a 3-level tree (Project → Session → Subagent). All data loading is async via `tea.Cmd` returning typed messages (`QuickStatsLoadedMsg`, `TranscriptLoadedMsg`, etc.).
 - `searchindex.go` — `loadSearchIndexCmd` builds the content index in the background (`SearchIndexLoadedMsg`)
 - `statusindex.go` — `renderIndexBar`: status line shown above the key-hint bar (cache on/off + path, index progress, save state, filter count); segments shrink then drop by priority so it never wraps. `Model.indexJobs` counts started-but-unfinished reindexes (use `startReindex()`, balanced by `SearchIndexLoadedMsg`)
-- `options.go` — `Options` and `ResolveIndexCache` (flag/env resolution)
+- `options.go` — `Options` (index cache and pricing settings), `ResolveIndexCache` (flag/env resolution, also used for `--pricing-auto`), `PricingFetchOptions`
+- Clipboard (in `app.go`): `clipboardCommand` is a pure OS/env tool selector (pbcopy / clip / wl-copy / xclip / xsel); `copyToClipboardCmd` runs it in the background with a 3 s timeout and the text only on stdin, reporting via `ClipboardCopiedMsg`
 - `keys.go` — centralized key bindings; all key handling in `app.go` uses `key.Matches()` against this map.
 - `message_render.go` — renders individual JSONL messages (user/assistant/tool) into styled strings
 - `styles.go` — all Lip Gloss styles in one place

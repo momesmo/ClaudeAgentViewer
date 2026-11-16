@@ -1,5 +1,7 @@
 # Deep Search Implementation Plan
 
+> **Status: fully implemented (2026-11-13 to 2026-11-16) and kept as a historical record. Do not re-execute it.** Current behavior is described in `CLAUDE.md`; later changes (head+tail blobs, 256 KB cap, stale-entry pruning, match snippets) differ from this plan. Backlog: `docs/improvements.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make `/` search match session content (all user prompts, assistant text, tool names, git branch, model) without making typing slower.

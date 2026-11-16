@@ -111,6 +111,16 @@ By default the content search index is built in memory only. To persist it betwe
 - The same rules power Privacy mode (`p`) in the transcript view, so the same limits apply there.
 - Redaction applies to the saved copy only. In the live session you can still search for a secret you pasted. After a restart with the cache enabled, that secret is `[REDACTED]` in the loaded cache and won't match until its session file changes (or you run `--clear-cache`).
 
+## Development
+
+```bash
+go vet ./... && go test -race -count=1 ./...     # the tests use a fixture and never touch your real ~/.claude
+gofmt -l $(git ls-files '*.go')                  # must print nothing (CI checks it)
+go run . --version                               # the only other flag not covered above
+```
+
+CI (`.github/workflows/ci.yml`) runs the same checks on Linux, macOS and Windows, cross-builds six targets, tests the minimum Go version and runs `govulncheck`. `go.mod` pins a patched Go toolchain, which Go downloads automatically. For architecture notes, working agreements and the backlog, see `CLAUDE.md`, `docs/development.md` and `docs/improvements.md`.
+
 ## Keybindings
 
 | Key | Action |
@@ -149,6 +159,7 @@ Costs come from a price table built from Anthropic's published rates (embedded i
 - A `~` before a cost means some model was priced by family because its exact version isn't in the table; a `+` means some tokens belong to a model with **no known price** and are not included (the detail pane names it).
 - `claudevu --update-pricing` fetches the current prices once (the only network use), shows what changed, and exits. Large price swings are refused until you review them and pass `--accept-price-changes`.
 - `--pricing-auto` / `CLAUDEVU_PRICING_AUTO=1` opts in to a background refresh, at most once a day, when a model without an exact price shows up.
+- `--pricing-source <https URL>` uses a different pricing page (trusted only for its own host). `--accept-price-changes` applies a refresh that moves prices by more than 3x after you have reviewed it with `--update-pricing`.
 - You can override or add prices in `<user config dir>/claudevu/pricing-overrides.json` (on macOS: `~/Library/Application Support/claudevu/`).
 - `claudevu --pricing-info` explains where every price comes from, lists any problems (with fixes), shows the refresh policy and how each model in your sessions is priced. It is read-only and offline.
 
