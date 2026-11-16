@@ -823,8 +823,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, keys.Copy):
 			if m.selectedInfo != nil {
-				copyToClipboard(m.selectedInfo.SessionID)
-				m.setStatus("Copied session ID")
+				if err := copyToClipboard(m.selectedInfo.SessionID); err != nil {
+					m.setStatus("Copy failed: " + err.Error())
+				} else {
+					m.setStatus("Copied session ID")
+				}
 			}
 			return m, nil
 
@@ -1585,20 +1588,43 @@ func formatTokens(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-func copyToClipboard(text string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
+// clipboardCommand picks the platform clipboard tool. It is pure (all
+// environment access is injected) so every OS/env combination is testable.
+// The text to copy is never part of the result: callers feed it on stdin.
+func clipboardCommand(goos string, getenv func(string) string, lookPath func(string) (string, error)) (string, []string, error) {
+	have := func(name string) bool { _, err := lookPath(name); return err == nil }
+	switch goos {
 	case "windows":
-		cmd = exec.Command("cmd", "/c", "echo|set /p="+text+"|clip")
+		return "clip", nil, nil
 	case "darwin":
-		cmd = exec.Command("pbcopy")
-		cmd.Stdin = strings.NewReader(text)
-	default:
-		cmd = exec.Command("xclip", "-selection", "clipboard")
-		cmd.Stdin = strings.NewReader(text)
+		return "pbcopy", nil, nil
 	}
+	if getenv("WAYLAND_DISPLAY") != "" && have("wl-copy") {
+		return "wl-copy", nil, nil
+	}
+	if have("xclip") {
+		return "xclip", []string{"-selection", "clipboard"}, nil
+	}
+	if have("xsel") {
+		return "xsel", []string{"--clipboard", "--input"}, nil
+	}
+	return "", nil, errors.New("no clipboard tool found (install wl-clipboard, xclip or xsel)")
+}
+
+// copyToClipboard writes text to the system clipboard via stdin (never
+// interpolated into a shell string).
+func copyToClipboard(text string) error {
+	name, args, err := clipboardCommand(runtime.GOOS, os.Getenv, exec.LookPath)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = strings.NewReader(text)
 	cmd.Env = os.Environ()
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
 }
 
 // IndexSaveDoneMsg reports a finished cache save (Err non-nil on failure; non-fatal).
