@@ -2,169 +2,259 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/user/claudevu/internal/data"
-	"github.com/user/claudevu/internal/tui"
-
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/user/claudevu/internal/data"
+	"github.com/user/claudevu/internal/testfixture"
+	"github.com/user/claudevu/internal/tui"
 )
 
-// update helper that handles the Model type assertion
-func update(m tui.Model, msg tea.Msg) tui.Model {
-	result, _ := m.Update(msg)
-	return result.(tui.Model)
+// ---- shared helpers for the TUI tests ----
+
+func upd(m tui.Model, msg tea.Msg) tui.Model {
+	r, _ := m.Update(msg)
+	return r.(tui.Model)
 }
 
+func runes(m tui.Model, s string) tui.Model {
+	return upd(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})
+}
+
+func press(m tui.Model, k tea.KeyType, n int) tui.Model {
+	for i := 0; i < n; i++ {
+		m = upd(m, tea.KeyMsg{Type: k})
+	}
+	return m
+}
+
+func newModel(t *testing.T, fx *testfixture.Fixture, w, h int) tui.Model {
+	t.Helper()
+	m := tui.NewModel(fx.ClaudeDir, tui.Options{})
+	return upd(m, tea.WindowSizeMsg{Width: w, Height: h})
+}
+
+// show prints a screen only under `go test -v`.
+func show(name string, m tui.Model) {
+	if testing.Verbose() {
+		fmt.Printf("\n=== %s ===\n%s\n", name, m.View())
+	}
+}
+
+func lineCount(s string) int { return strings.Count(s, "\n") + 1 }
+
+// checkFits fails if the view is taller than the terminal.
+func checkFits(t *testing.T, step string, m tui.Model, w, h int) {
+	t.Helper()
+	if n := lineCount(m.View()); n > h {
+		t.Errorf("%s at %dx%d: view has %d lines, terminal has %d", step, w, h, n, h)
+	}
+}
+
+// rowOf returns the list-row index (0-based, across all expanded projects) of a
+// project or session in a model where every project is expanded, sessions
+// collapsed.
+func rowOf(fx *testfixture.Fixture, key string) int {
+	row := 0
+	for _, p := range fx.Projects {
+		row++
+		for _, s := range p.Sessions {
+			if s.Key == key {
+				return row
+			}
+			row++
+		}
+	}
+	return -1
+}
+
+// expandAllProjects opens every project (cursor ends on the last project row).
+func expandAllProjects(m tui.Model, fx *testfixture.Fixture) tui.Model {
+	for i, p := range fx.Projects {
+		m = upd(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if i < len(fx.Projects)-1 {
+			m = press(m, tea.KeyDown, len(p.Sessions)+1)
+		}
+	}
+	return m
+}
+
+// cursorTo moves the cursor to a flat row index.
+func cursorTo(m tui.Model, row int) tui.Model {
+	m = press(m, tea.KeyUp, 60)
+	return press(m, tea.KeyDown, row)
+}
+
+func quickStats(t *testing.T, s *testfixture.SessionExp) data.SessionStats {
+	t.Helper()
+	st, err := data.QuickScanStats(s.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// ---- tests ----
+
 func TestFullRender(t *testing.T) {
-	homeDir, _ := os.UserHomeDir()
-	claudeDir := filepath.Join(homeDir, ".claude")
-
-	m := tui.NewModel(claudeDir, tui.Options{})
-	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
-
+	fx := testfixture.BuildClaudeDir(t)
+	m := newModel(t, fx, 120, 40)
 	view := m.View()
-	fmt.Println("=== INITIAL VIEW (first 25 lines) ===")
-	for i, line := range strings.Split(view, "\n") {
-		if i > 25 {
-			break
+	show("INITIAL", m)
+
+	if want := fmt.Sprintf("Sessions (%d)", len(fx.Sessions)); !strings.Contains(view, want) {
+		t.Errorf("initial view lacks %q", want)
+	}
+	for _, p := range fx.Projects {
+		if want := fmt.Sprintf("%s (%d)", p.Path, len(p.Sessions)); !strings.Contains(view, want) {
+			t.Errorf("initial view lacks project row %q", want)
 		}
-		fmt.Println(line)
 	}
 
-	if !strings.Contains(view, "Sessions") {
-		t.Error("Expected 'Sessions' in initial view")
-	}
-
-	// Navigate down and select first session
-	m = update(m, tea.KeyMsg{Type: tea.KeyDown})
-	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
-
+	// select the most recent session and look at its detail
+	m = upd(m, tea.KeyMsg{Type: tea.KeyEnter}) // expand first project
+	m = upd(m, tea.KeyMsg{Type: tea.KeyDown})
+	m = upd(m, tea.KeyMsg{Type: tea.KeyEnter}) // expand its first session
+	rec := fx.Session(t, "recent")
+	m = upd(m, tui.QuickStatsLoadedMsg{Stats: quickStats(t, rec), Path: rec.Path})
+	show("AFTER SELECT", m)
 	view = m.View()
-	fmt.Println("\n=== AFTER SELECT (first 30 lines) ===")
-	for i, line := range strings.Split(view, "\n") {
-		if i > 30 {
-			break
-		}
-		fmt.Println(line)
-	}
-
 	if !strings.Contains(view, "Session") {
-		t.Error("Expected session detail in view")
+		t.Error("expected session detail in view")
+	}
+	if !strings.Contains(view, "Explore") || !strings.Contains(view, "Plan") {
+		t.Errorf("session row should list its subagents:\n%s", view)
+	}
+}
+
+// TestRenderSizesNeverPanicOrOverflow walks a flagged, live-stats session through
+// many terminal sizes. The long live-stats badge in a narrow pane used to drive
+// a negative width into truncate and panic.
+func TestRenderSizesNeverPanicOrOverflow(t *testing.T) {
+	fx := testfixture.BuildClaudeDir(t)
+	stats := map[string]data.SessionStats{}
+	for _, s := range fx.Sessions {
+		if s.HasFile {
+			stats[s.ID] = quickStats(t, s)
+		}
+	}
+	sizes := [][2]int{{200, 60}, {120, 40}, {100, 30}, {80, 24}, {60, 20}, {60, 12}, {40, 15}, {30, 10}}
+	for _, sz := range sizes {
+		w, h := sz[0], sz[1]
+		t.Run(fmt.Sprintf("%dx%d", w, h), func(t *testing.T) {
+			m := newModel(t, fx, w, h)
+			checkFits(t, "initial", m, w, h)
+			m = expandAllProjects(m, fx)
+			checkFits(t, "expanded", m, w, h)
+
+			// flag the recent session (long badge) and a mystery one (unpriced "+")
+			m = cursorTo(m, rowOf(fx, "recent"))
+			m = runes(m, "f")
+			m = cursorTo(m, rowOf(fx, "mystery"))
+			m = runes(m, "f")
+			m = upd(m, tui.FlaggedRefreshMsg{Stats: stats})
+			checkFits(t, "flagged with live stats", m, w, h)
+			if w >= 100 && !strings.Contains(m.View(), "⚑") && !strings.Contains(m.View(), "🚩") && !strings.Contains(m.View(), "$") {
+				t.Errorf("flagged live stats (a cost) should be visible at width %d", w)
+			}
+
+			// open the recent session (subagents), details, logs, search, dashboard, help
+			m = cursorTo(m, rowOf(fx, "recent"))
+			m = upd(m, tea.KeyMsg{Type: tea.KeyEnter})
+			rec := fx.Session(t, "recent")
+			m = upd(m, tui.QuickStatsLoadedMsg{Stats: stats[rec.ID], Path: rec.Path})
+			checkFits(t, "session open", m, w, h)
+			msgs, err := data.LoadTranscript(rec.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m = upd(m, tui.TranscriptLoadedMsg{Messages: msgs, Stats: data.ComputeStats(msgs), Path: rec.Path})
+			checkFits(t, "logs", m, w, h)
+			m = upd(m, tea.KeyMsg{Type: tea.KeyTab})
+			m = press(m, tea.KeyDown, 5)
+			m = press(m, tea.KeyPgDown, 2)
+			checkFits(t, "logs scrolled", m, w, h)
+			m = upd(m, tea.KeyMsg{Type: tea.KeyTab})
+			m = runes(m, "?")
+			if h >= 24 { // the help text is a fixed 22 rows; it is not clipped on shorter terminals
+				checkFits(t, "help", m, w, h)
+			}
+			m = upd(m, tea.KeyMsg{Type: tea.KeyEsc})
+			m = runes(m, "/")
+			m = runes(m, "mystery")
+			checkFits(t, "search", m, w, h)
+		})
 	}
 }
 
 func TestSubagentTreeView(t *testing.T) {
-	homeDir, _ := os.UserHomeDir()
-	claudeDir := filepath.Join(homeDir, ".claude")
-
-	groups, err := data.LoadHistory(claudeDir)
-	if err != nil {
-		t.Skip("No history")
+	fx := testfixture.BuildClaudeDir(t)
+	rec := fx.Session(t, "recent")
+	if len(rec.Subagents) != 2 {
+		t.Fatalf("fixture session has %d subagents", len(rec.Subagents))
 	}
-
-	// Find session with subagents and its list position
-	var targetSessionID string
-	for _, g := range groups {
-		for _, s := range g.Sessions {
-			subagents, _ := data.ScanSubagents(claudeDir, s.SessionID)
-			if len(subagents) > 0 {
-				targetSessionID = s.SessionID
-				running := data.CountRunningSubagents(subagents)
-				fmt.Printf("Target session: %s (%d subagents, %d running)\n",
-					s.SessionID, len(subagents), running)
-				for i, sa := range subagents {
-					if i >= 5 {
-						fmt.Printf("  ... and %d more\n", len(subagents)-5)
-						break
-					}
-					fmt.Printf("  %s %s %s [%s] running=%v\n",
-						data.SubagentStatusEmoji(sa.IsRunning),
-						data.SubagentTypeEmoji(sa.AgentType),
-						sa.AgentID, sa.AgentType, sa.IsRunning)
-				}
-				break
-			}
-		}
-		if targetSessionID != "" {
-			break
-		}
-	}
-
-	if targetSessionID == "" {
-		t.Skip("No session with subagents")
-	}
-
-	// Build model and simulate navigating to the session
-	m := tui.NewModel(claudeDir, tui.Options{})
-	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 50})
-
-	// Navigate through list to find the target session
-	for i := 0; i < 100; i++ {
-		m = update(m, tea.KeyMsg{Type: tea.KeyDown})
-		// Try selecting
-		mCopy := update(m, tea.KeyMsg{Type: tea.KeyEnter})
-		view := mCopy.View()
-		if strings.Contains(view, targetSessionID[:8]) {
-			m = mCopy
-			fmt.Printf("Found target at position %d\n", i)
-			break
-		}
-	}
+	m := newModel(t, fx, 120, 50)
+	m = expandAllProjects(m, fx)
+	m = cursorTo(m, rowOf(fx, "recent"))
+	m = upd(m, tea.KeyMsg{Type: tea.KeyEnter}) // expand session -> subagent rows
+	m = upd(m, tui.QuickStatsLoadedMsg{Stats: quickStats(t, rec), Path: rec.Path})
+	show("SESSION WITH SUBAGENTS", m)
 
 	view := m.View()
-	fmt.Println("\n=== SESSION WITH SUBAGENTS ===")
-	for i, line := range strings.Split(view, "\n") {
-		if i > 15 {
-			break
+	if !strings.Contains(view, "[⚡1/2]") {
+		t.Errorf("session row should show 1 of 2 subagents running:\n%s", view)
+	}
+	var runRow, doneRow string
+	for _, ln := range strings.Split(view, "\n") {
+		switch {
+		case strings.Contains(ln, "Explore"):
+			runRow = ln
+		case strings.Contains(ln, "Plan"):
+			doneRow = ln
 		}
-		fmt.Println(line)
+	}
+	if !strings.Contains(runRow, "running") || !strings.Contains(runRow, data.SubagentStatusEmoji(true)) {
+		t.Errorf("running subagent row = %q", runRow)
+	}
+	if doneRow == "" || strings.Contains(doneRow, "running") || !strings.Contains(doneRow, data.SubagentStatusEmoji(false)) {
+		t.Errorf("completed subagent row = %q", doneRow)
 	}
 
-	// Check if subagent count shows
-	if strings.Contains(view, "Subagent") {
-		fmt.Println("✓ Subagent section visible in detail")
-	} else {
-		fmt.Println("✗ Subagent section NOT visible (might need to scroll)")
+	// 's' toggles the subagent tree in the detail pane; the pane stays within the screen
+	m = runes(m, "s")
+	show("AFTER s", m)
+	checkFits(t, "subagent tree", m, 120, 50)
+	m = upd(m, tea.KeyMsg{Type: tea.KeyTab})
+	m = runes(m, "1")
+	checkFits(t, "expand first subagent", m, 120, 50)
+
+	m = runes(m, "?")
+	show("HELP", m)
+	if v := m.View(); !strings.Contains(strings.ToLower(v), "subagent") {
+		t.Errorf("help screen should mention subagents:\n%s", v)
 	}
+}
 
-	// Press 's' to toggle subagent tree
-	m = update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+func quickMsg(t *testing.T, s *testfixture.SessionExp) tea.Msg {
+	return tui.QuickStatsLoadedMsg{Stats: quickStats(t, s), Path: s.Path}
+}
 
-	view = m.View()
-	fmt.Println("\n=== AFTER 's' (SUBAGENT TREE) ===")
-	for i, line := range strings.Split(view, "\n") {
-		if i > 35 {
-			break
-		}
-		fmt.Println(line)
+func flaggedMsg(stats map[string]data.SessionStats) tea.Msg {
+	return tui.FlaggedRefreshMsg{Stats: stats}
+}
+
+func transcriptMsg(msgs []data.SessionMessage, path string) tea.Msg {
+	return tui.TranscriptLoadedMsg{Messages: msgs, Stats: data.ComputeStats(msgs), Path: path}
+}
+
+// listed reports whether a session's row (display text, possibly truncated by
+// the pane width) is visible in view.
+func listed(view string, s *testfixture.SessionExp) bool {
+	d := s.Display
+	if len(d) > 8 {
+		d = d[:8]
 	}
-
-	// Switch to detail pane and expand first subagent
-	m = update(m, tea.KeyMsg{Type: tea.KeyTab})
-	m = update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
-
-	view = m.View()
-	fmt.Println("\n=== AFTER '1' (EXPAND FIRST SUBAGENT) ===")
-	allLines := strings.Split(view, "\n")
-	for i, line := range allLines {
-		if i > 40 {
-			fmt.Printf("... (%d more lines)\n", len(allLines)-40)
-			break
-		}
-		fmt.Println(line)
-	}
-
-	// Help test
-	m = update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
-	view = m.View()
-	fmt.Println("\n=== HELP SCREEN ===")
-	fmt.Println(view)
-
-	if !strings.Contains(view, "subagent") && !strings.Contains(view, "Subagent") {
-		t.Error("Help screen should mention subagents")
-	}
+	return strings.Contains(view, d)
 }

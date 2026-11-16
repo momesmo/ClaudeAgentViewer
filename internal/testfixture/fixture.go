@@ -316,8 +316,8 @@ func BuildClaudeDir(t testing.TB) *Fixture {
 	b.assistant("mystery-model-1", tok{450, 80, 1500, 0, 0}, "end_turn", text("Bye."))
 	finish(b)
 
-	_, b = newSession("tiny", "/work/gamma", "hi", 200*24*time.Hour, true)
-	b.user("hi")
+	_, b = newSession("tiny", "/work/gamma", "say hi to tiny", 200*24*time.Hour, true)
+	b.user("say hi to tiny")
 	b.assistant("claude-sonnet-5-5", tok{10, 5, 0, 0, 0}, "end_turn", text("Hello!"))
 	finish(b)
 
