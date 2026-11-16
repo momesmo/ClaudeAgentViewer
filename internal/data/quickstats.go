@@ -79,10 +79,6 @@ func QuickScanStats(path string) (SessionStats, error) {
 			if strings.Contains(string(line), `"type":"user"`) {
 				stats.MessageCount++
 			}
-			// Count tool uses
-			if strings.Contains(string(line), `"tool_use"`) {
-				stats.ToolCallCount++
-			}
 			continue
 		}
 
