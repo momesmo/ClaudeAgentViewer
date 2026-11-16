@@ -24,6 +24,8 @@ go test -race ./...
 go test ./internal/data -run xxx -bench BenchmarkIndex
 ```
 
+**CI and toolchain.** `.github/workflows/ci.yml` runs vet, build, `go test -race` and a gofmt check on Linux, macOS and Windows, cross-builds six OS/arch targets, tests the minimum Go version in `go.mod`, and runs a blocking `govulncheck`. `go.mod` pins `toolchain go1.27.4`; Go downloads it automatically, which keeps local builds, CI and releases on a patched standard library (older patch releases had reachable `net/http`/`crypto/tls` vulnerabilities that the price fetcher would hit). Actions are pinned to full commit SHAs; Dependabot keeps them current. Run `gofmt -l $(git ls-files '*.go')` before committing: CI fails on unformatted files.
+
 **Tests never touch your real `~/.claude`.** Every package's `TestMain` calls `internal/testenv`, which points HOME, USERPROFILE, XDG_*, AppData and LocalAppData at an empty temp dir. Tests use `internal/testfixture` (`BuildClaudeDir`): a fake claude dir with the real on-disk shape (one JSONL line per content block with repeated message IDs and usage, subagents, an oversized line, unknown models, fast and US-geo messages) whose expected values are derived by hand, including literal USD amounts. A test must never skip because data is missing. To profile your own data: `CLAUDEVU_TEST_REAL_CLAUDE=1 go test -run PerfProfile .`
 
 ## Architecture

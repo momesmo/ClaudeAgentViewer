@@ -29,7 +29,7 @@ _Last updated: 2026-11-16_
 - [x] **R-16 (H, M) Tests that don't depend on the real `~/.claude`.** Done 2026-11-16: `internal/testfixture` builds a realistic fake claude dir with hand-derived expectations (including literal USD amounts), `internal/testenv` isolates HOME/USERPROFILE/XDG/AppData in all three test packages, no test skips for missing data, `CLAUDEVU_TEST_REAL_CLAUDE=1` keeps an opt-in profile of your own data. Found and fixed: status bar wrapping past the terminal height, quick scan reporting 0 tool calls, user lines quoting tool_use inflating the count. Original item:
   The root-package tests read live data, which hid the `truncate` panic and makes results vary by machine. Move them to a fixture directory.
 - [ ] **R-17 (M, S) `gofmt` the repo and split `app.go`** (about 1,600 lines) into model / update / render / commands. Do the formatting pass in its own commit so diffs stay readable.
-- [ ] **R-18 (M, M) CI and cross-platform checks.** A workflow running `go vet`, `go test -race` and a build on macOS, Linux and Windows. Add Wayland (`wl-copy`) to the clipboard code.
+- [x] **R-18 (M, M) CI and cross-platform checks.** Done 2026-11-16 (verified locally; first real run pending): `.github/workflows/ci.yml` (test on ubuntu/macos/windows with `-race`, gofmt check, six-target cross-build, minimum-Go job, blocking govulncheck), actions pinned to commit SHAs, Dependabot, `.gitattributes` (LF), `toolchain go1.27.4` in go.mod (govulncheck found 11 reachable stdlib vulnerabilities on 1.26.1), clipboard selector with Wayland support and a 3s background timeout, Windows-style path shortening. Original item: A workflow running `go vet`, `go test -race` and a build on macOS, Linux and Windows. Add Wayland (`wl-copy`) to the clipboard code.
 
 ## 2. Search
 
@@ -87,6 +87,10 @@ _Last updated: 2026-11-16_
 
 - [ ] **R-40 (L, S) Help screen height.** The help screen is a fixed 22 rows and is not clipped, so on terminals shorter than 22 rows its View() exceeds the height.
 - [ ] **R-41 (L, S) Test fixture and price table coupling.** Fixture cost expectations read rates from the embedded table and assert hand-derived USD literals; a deliberate price-table update means updating those literals.
+- [ ] **R-42 (L, S) Duplicate CI runs.** `on: push` plus `on: pull_request` runs twice for a same-repo PR branch (the concurrency group is keyed on the ref, which differs). Restrict `push` to `main`, or key the group on the commit SHA.
+- [ ] **R-43 (M, S) Verify the first real CI run.** Things only GitHub can confirm: Actions enabled on the fork, setup-go installing 1.27.4 from the `toolchain` line, `-race` with cgo on windows-latest, LF handling on a Windows checkout, the min-Go job really printing go1.26.1, Dependabot parsing the config and bumping the `toolchain` line.
+- [ ] **R-44 (L, S) Clipboard on Windows.** `clip` reads the OEM code page, fine for ASCII session IDs but not for arbitrary Unicode text if more things become copyable.
+- [ ] **R-45 (L, S) Path shortening corner cases.** Mixed `\` and `/` separators, UNC paths and case-insensitive Windows home matching in the status bar's cache path.
 - [ ] **R-34 (M, S) "Messages" count means transcript lines, not API messages.** The Activity > Messages figure still counts every assistant transcript line (one per content block). Decide whether to show API messages, conversation turns, or both.
 - [ ] **R-35 (L, S) Concurrent price refreshes.** Two claudevu processes can both fetch and race on the attempt-state file (files never tear; one attempt count may be lost). An advisory lock would serialize them.
 - [ ] **R-36 (L, S) Pricing file housekeeping.** Temp files from a crashed pricing write are not swept; an existing cache directory with looser permissions is not tightened; the directory is not fsynced after rename.
@@ -118,5 +122,6 @@ _(none yet)_
 Add one line per change: date, item ID, what changed, why.
 
 - 2026-11-13: List created from a code review of the app.
+- 2026-11-16: R-18 done locally (CI + portability); added R-42 to R-45.
 - 2026-11-16: R-16 done (see item). Added R-40, R-41.
 - 2026-11-16: R-02 done (see Completed). Found while doing it: every message was counted ~2x (usage repeated on each content-block line); dashboard cost dropped from ~$1,216 to the true figure. Added R-34 to R-38.
