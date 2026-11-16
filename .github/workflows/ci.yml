@@ -39,7 +39,7 @@ jobs:
       - name: gofmt
         if: matrix.os == 'ubuntu-latest'
         run: |
-          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          unformatted="$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
           if [ -n "$unformatted" ]; then
             echo "Not gofmt-clean:"
             echo "$unformatted"
