@@ -35,7 +35,7 @@ func TestIndexBar_CacheOff(t *testing.T) {
 }
 
 func TestIndexBar_CacheOnShowsPathAndSeeded(t *testing.T) {
-	home, _ := os.UserHomeDir()
+	home := os.Getenv("HOME") // isolated by TestMain; only a path prefix here
 	m := barModel(160)
 	m.opts.IndexCache = true
 	m.cacheDir = home + "/Library/Caches/claudevu"
@@ -126,7 +126,7 @@ func TestIndexBar_FilterCount(t *testing.T) {
 }
 
 func TestIndexBar_NarrowWidthNeverWraps(t *testing.T) {
-	home, _ := os.UserHomeDir()
+	home := os.Getenv("HOME") // isolated by TestMain; only a path prefix here
 	for _, w := range []int{20, 40, 60, 80, 120} {
 		m := barModel(w)
 		m.opts.IndexCache = true
