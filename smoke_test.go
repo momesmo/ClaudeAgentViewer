@@ -51,6 +51,12 @@ func TestLoadHistory(t *testing.T) {
 // scanBoth runs the quick scan and the full transcript pass and returns both.
 func scanBoth(t *testing.T, s *testfixture.SessionExp) (quick, full data.SessionStats) {
 	t.Helper()
+	return scanBothLines(t, s, s.Lines)
+}
+
+// scanBothLines is scanBoth when some lines are expected to be skipped.
+func scanBothLines(t *testing.T, s *testfixture.SessionExp, wantLines int) (quick, full data.SessionStats) {
+	t.Helper()
 	quick, err := data.QuickScanStats(s.Path)
 	if err != nil {
 		t.Fatalf("%s QuickScanStats: %v", s.Key, err)
@@ -59,16 +65,21 @@ func scanBoth(t *testing.T, s *testfixture.SessionExp) (quick, full data.Session
 	if err != nil {
 		t.Fatalf("%s LoadTranscript: %v", s.Key, err)
 	}
-	if len(msgs) != s.Lines {
-		t.Errorf("%s: LoadTranscript returned %d messages, want %d", s.Key, len(msgs), s.Lines)
+	if len(msgs) != wantLines {
+		t.Errorf("%s: LoadTranscript returned %d messages, want %d", s.Key, len(msgs), wantLines)
 	}
 	return quick, data.ComputeStats(msgs)
 }
 
 func checkStats(t *testing.T, label string, got data.SessionStats, s *testfixture.SessionExp) {
 	t.Helper()
-	if got.MessageCount != s.Lines {
-		t.Errorf("%s %s: MessageCount = %d, want %d", s.Key, label, got.MessageCount, s.Lines)
+	checkStatsLines(t, label, got, s, s.Lines)
+}
+
+func checkStatsLines(t *testing.T, label string, got data.SessionStats, s *testfixture.SessionExp, wantLines int) {
+	t.Helper()
+	if got.MessageCount != wantLines {
+		t.Errorf("%s %s: MessageCount = %d, want %d", s.Key, label, got.MessageCount, wantLines)
 	}
 	// duplicated block lines must not multiply usage
 	if got.TotalInputTokens != s.Input || got.TotalOutputTokens != s.Output ||
@@ -151,6 +162,9 @@ func TestStatsMatchFixtureForEverySession(t *testing.T) {
 	}
 }
 
+// The fixture's big line is 320 KB, below the real 32 MiB limit; lowering the
+// limit below it makes the scanners hit the oversize path. The oversize line
+// must be skipped, every later message still counted, with no error.
 func TestBigLineDoesNotDropLaterMessages(t *testing.T) {
 	fx := testfixture.BuildClaudeDir(t)
 	s := fx.Session(t, "bigline")
@@ -158,37 +172,86 @@ func TestBigLineDoesNotDropLaterMessages(t *testing.T) {
 	if err != nil || fi.Size() < testfixture.BigLineBytes {
 		t.Fatalf("fixture transcript missing or too small: %v %v", fi, err)
 	}
+
+	// default limit: the big line is a normal user message
 	quick, full := scanBoth(t, s)
-	// the assistant messages after the huge tool_result still count
-	if s.APIMessages != 3 || quick.TotalOutputTokens != s.Output || full.TotalOutputTokens != s.Output || s.Output != 100+900+300 {
-		t.Errorf("later messages lost: quick out=%d full out=%d want %d", quick.TotalOutputTokens, full.TotalOutputTokens, s.Output)
+	checkStats(t, "quick", quick, s)
+	checkStats(t, "full", full, s)
+
+	// lowered limit: the big line is skipped, the three messages after it survive
+	defer data.SetStatsLineLimitForTest(64 << 10)()
+	want := s.Lines - s.BigLines
+	quick, full = scanBothLines(t, s, want)
+	checkStatsLines(t, "quick(limit 64KB)", quick, s, want)
+	checkStatsLines(t, "full(limit 64KB)", full, s, want)
+	if quick.TotalOutputTokens != 100+900+300 || full.TotalOutputTokens != 100+900+300 {
+		t.Errorf("later messages lost: out quick=%d full=%d, want 1300", quick.TotalOutputTokens, full.TotalOutputTokens)
+	}
+}
+
+// Hand-derived per-message sums (see testfixture for the arithmetic), checked
+// against what the scanners report: mixed models, fast, US geo, 5m and 1h writes.
+func TestCostsMatchHandDerivedLiterals(t *testing.T) {
+	fx := testfixture.BuildClaudeDir(t)
+	lit := map[string]float64{
+		"tiny":     testfixture.LiteralTinyUSD,
+		"recent":   testfixture.LiteralRecentUSD,
+		"speedgeo": testfixture.LiteralSpeedGeoUSD,
+		"mixed":    0.00915 + 0.0305, // sonnet 5650+3500 micro-USD, opus-4-8 30500
+	}
+	for key, want := range lit {
+		quick, full := scanBoth(t, fx.Session(t, key))
+		if !near(quick.EstimatedCostUSD, want) || !near(full.EstimatedCostUSD, want) {
+			t.Errorf("%s: cost quick=%v full=%v, want %v", key, quick.EstimatedCostUSD, full.EstimatedCostUSD, want)
+		}
 	}
 }
 
 func TestMixedModelSessionPricedPerModel(t *testing.T) {
 	fx := testfixture.BuildClaudeDir(t)
-	s := fx.Session(t, "mixed")
-	if len(s.PerModel) != 2 {
-		t.Fatalf("fixture mixed session has %d models", len(s.PerModel))
+	quick, full := scanBoth(t, fx.Session(t, "mixed"))
+	for name, st := range map[string]data.SessionStats{"quick": quick, "full": full} {
+		rows := map[string]data.ModelUsage{}
+		for _, r := range st.ModelBreakdown {
+			rows[r.Model] = r
+		}
+		if len(rows) != 2 {
+			t.Fatalf("%s: model rows = %d, want 2", name, len(rows))
+		}
+		son, opus := rows["claude-sonnet-5-5"], rows["claude-opus-4-8"]
+		if son.Messages != 2 || opus.Messages != 1 {
+			t.Errorf("%s: messages sonnet=%d opus=%d, want 2 and 1", name, son.Messages, opus.Messages)
+		}
+		if !near(son.CostUSD, 0.00915) || !near(opus.CostUSD, 0.0305) {
+			t.Errorf("%s: per-model cost sonnet=%v opus=%v, want 0.00915 and 0.0305", name, son.CostUSD, opus.CostUSD)
+		}
 	}
-	_, full := scanBoth(t, s)
-	if len(full.ModelBreakdown) != 2 || len(full.Models) != 2 {
-		t.Errorf("model rows = %d, want 2", len(full.ModelBreakdown))
-	}
-	if s.PerModel["claude-sonnet-5-5"].Messages != 2 || s.PerModel["claude-opus-4-8"].Messages != 1 {
-		t.Errorf("fixture per-model messages wrong: %+v", s.PerModel)
+}
+
+// Locally generated <synthetic> lines and truncated JSON lines must be ignored.
+func TestSyntheticAndGarbageLinesIgnored(t *testing.T) {
+	fx := testfixture.BuildClaudeDir(t)
+	quick, full := scanBoth(t, fx.Session(t, "recent"))
+	for name, st := range map[string]data.SessionStats{"quick": quick, "full": full} {
+		for _, m := range st.Models {
+			if m == "<synthetic>" {
+				t.Errorf("%s: <synthetic> reported as a model", name)
+			}
+		}
+		if len(st.ModelBreakdown) != 1 || st.TotalInputTokens >= 99999 {
+			t.Errorf("%s: breakdown=%d input=%d (garbage line or synthetic usage leaked)", name, len(st.ModelBreakdown), st.TotalInputTokens)
+		}
 	}
 }
 
 func TestUnknownModelIsUnpricedNotZeroCost(t *testing.T) {
 	fx := testfixture.BuildClaudeDir(t)
-	s := fx.Session(t, "mystery")
-	if !s.Unpriced || s.CostUSD != 0 || s.UnpricedToks == 0 {
-		t.Fatalf("fixture mystery session expectation wrong: %+v", s)
-	}
-	_, full := scanBoth(t, s)
-	if len(full.UnpricedModels) != 1 || full.UnpricedModels[0] != "mystery-model-1" {
-		t.Errorf("UnpricedModels = %v", full.UnpricedModels)
+	quick, full := scanBoth(t, fx.Session(t, "mystery"))
+	// 400+120+1000 and 450+80+1500 tokens, none of them costed
+	for name, st := range map[string]data.SessionStats{"quick": quick, "full": full} {
+		if len(st.UnpricedModels) != 1 || st.UnpricedModels[0] != "mystery-model-1" || st.UnpricedTokens != 3550 || st.EstimatedCostUSD != 0 {
+			t.Errorf("%s: unpriced %v tokens %d cost %v, want [mystery-model-1] 3550 0", name, st.UnpricedModels, st.UnpricedTokens, st.EstimatedCostUSD)
+		}
 	}
 }
 
