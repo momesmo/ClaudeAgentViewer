@@ -1,0 +1,34 @@
+package data
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// QuickScanStats reported 0 tool calls: tool_use blocks live on assistant
+// lines, which the scan hands to the usage path without counting them.
+func TestQuickScanStatsCountsToolCalls(t *testing.T) {
+	line := func(typ, id, block string) string {
+		return `{"type":"` + typ + `","message":{"id":"` + id + `","model":"claude-sonnet-5-5","content":[` + block + `],"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n"
+	}
+	body := line("assistant", "m1", `{"type":"thinking","thinking":"x"}`) +
+		line("assistant", "m1", `{"type":"tool_use","id":"t1","name":"Read","input":{}}`) +
+		line("assistant", "m2", `{"type":"tool_use","id":"t2","name":"Bash","input":{}}`) +
+		line("assistant", "m2", `{"type":"text","text":"mentions \"type\":\"tool_use\" in prose"}`)
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := QuickScanStats(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.ToolCallCount != 2 {
+		t.Errorf("ToolCallCount = %d, want 2", st.ToolCallCount)
+	}
+	msgs, _ := LoadTranscript(p)
+	if full := ComputeStats(msgs); full.ToolCallCount != st.ToolCallCount {
+		t.Errorf("quick %d vs full %d", st.ToolCallCount, full.ToolCallCount)
+	}
+}

@@ -96,6 +96,8 @@ func QuickScanStats(path string) (SessionStats, error) {
 		}
 
 		stats.MessageCount++
+		// one content block per line, so this counts each tool call once
+		stats.ToolCallCount += strings.Count(string(line), `"type":"tool_use"`)
 		tally.Add(ql.Message.ID, ql.Message.Usage.usage(ql.Message.Model))
 	}
 
