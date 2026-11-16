@@ -121,8 +121,11 @@ func TestFullRender(t *testing.T) {
 	m = upd(m, tui.QuickStatsLoadedMsg{Stats: quickStats(t, rec), Path: rec.Path})
 	show("AFTER SELECT", m)
 	view = m.View()
-	if !strings.Contains(view, "Session") {
-		t.Error("expected session detail in view")
+	if !strings.Contains(view, "Session "+rec.ID) {
+		t.Errorf("detail pane header should be %q:\n%s", "Session "+rec.ID, view)
+	}
+	if !strings.Contains(view, "Tools:") || !strings.Contains(view, "3 calls") {
+		t.Errorf("detail should report the 3 tool calls (Read + 2 Agent) from the quick scan:\n%s", view)
 	}
 	if !strings.Contains(view, "Explore") || !strings.Contains(view, "Plan") {
 		t.Errorf("session row should list its subagents:\n%s", view)
@@ -156,8 +159,14 @@ func TestRenderSizesNeverPanicOrOverflow(t *testing.T) {
 			m = runes(m, "f")
 			m = upd(m, tui.FlaggedRefreshMsg{Stats: stats})
 			checkFits(t, "flagged with live stats", m, w, h)
-			if w >= 100 && !strings.Contains(m.View(), "⚑") && !strings.Contains(m.View(), "🚩") && !strings.Contains(m.View(), "$") {
-				t.Errorf("flagged live stats (a cost) should be visible at width %d", w)
+			if w >= 100 { // exact live-stats badges: tokens then cost, "unpriced" for the unknown model
+				v := m.View()
+				if !strings.Contains(v, "4.5k $0.03") {
+					t.Errorf("flagged recent session badge should read \"4.5k $0.03\" at width %d:\n%s", w, v)
+				}
+				if !strings.Contains(v, "1.1k unpriced") {
+					t.Errorf("flagged mystery session badge should read \"1.1k unpriced\" at width %d:\n%s", w, v)
+				}
 			}
 
 			// open the recent session (subagents), details, logs, search, dashboard, help

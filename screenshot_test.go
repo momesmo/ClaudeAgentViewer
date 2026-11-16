@@ -82,8 +82,8 @@ func TestTreeView(t *testing.T) {
 	m = upd(m, flaggedMsg(stats))
 	show("3_TWO_FLAGGED", m)
 	view = m.View()
-	if !strings.Contains(view, "unpriced") { // mystery model: cost is not guessed
-		t.Errorf("unpriced flagged session should say so:\n%s", view)
+	if !strings.Contains(view, "3.6k $0.04") || !strings.Contains(view, "1.1k unpriced") {
+		t.Errorf("flagged rows should show live badges \"3.6k $0.04\" (mixed) and \"1.1k unpriced\" (mystery):\n%s", view)
 	}
 	checkFits(t, "flagged", m, 120, 40)
 
@@ -102,8 +102,10 @@ func TestTreeView(t *testing.T) {
 	m = press(m, tea.KeyPgDown, 2)
 	show("4_LOGS", m)
 	view = m.View()
-	if !strings.Contains(view, "First with sonnet") && !strings.Contains(view, "compare two models") {
-		t.Errorf("logs view shows none of the transcript text:\n%s", view)
+	for _, want := range []string{"Transcript", "compare two models", "TOOL: Bash", "Now opus notes the zebracrossing detail.", "Welcome."} {
+		if !strings.Contains(view, want) {
+			t.Errorf("logs view lacks %q:\n%s", want, view)
+		}
 	}
 }
 

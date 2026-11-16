@@ -76,8 +76,8 @@ func TestDashboard(t *testing.T) {
 
 	// the unknown model is flagged, not silently costed at zero
 	myst := fx.Session(t, "mystery")
-	if d.UnpricedTokens != myst.UnpricedToks || len(d.UnpricedModels) != 1 || d.UnpricedModels[0] != "mystery-model-1" {
-		t.Errorf("unpriced = %d %v, want %d [mystery-model-1]", d.UnpricedTokens, d.UnpricedModels, myst.UnpricedToks)
+	if d.UnpricedTokens != 3550 || len(d.UnpricedModels) != 1 || d.UnpricedModels[0] != "mystery-model-1" {
+		t.Errorf("unpriced = %d %v, want 3550 [mystery-model-1]", d.UnpricedTokens, d.UnpricedModels)
 	}
 	if !ms(d, "mystery-model-1").Unpriced {
 		t.Error("mystery-model-1 row must be marked unpriced")
@@ -90,8 +90,18 @@ func TestDashboard(t *testing.T) {
 			t.Error("alpha has only priced models")
 		}
 	}
-	if len(d.TopCost) == 0 || len(d.TopCost) > 5 {
-		t.Errorf("TopCost has %d entries", len(d.TopCost))
+	if len(d.TopCost) != 5 {
+		t.Fatalf("TopCost has %d entries, want 5", len(d.TopCost))
+	}
+	// the most expensive session is the fast + US-geo one (hand-derived literal)
+	top := fx.Session(t, "speedgeo")
+	if d.TopCost[0].SessionID != top.ID || !near(d.TopCost[0].Cost, testfixture.LiteralSpeedGeoUSD) {
+		t.Errorf("TopCost[0] = %s %v, want speedgeo %v", d.TopCost[0].SessionID, d.TopCost[0].Cost, testfixture.LiteralSpeedGeoUSD)
+	}
+	for _, s := range fx.Sessions {
+		if s.HasFile && s.CostUSD > top.CostUSD {
+			t.Errorf("fixture session %s costs more than the expected top", s.Key)
+		}
 	}
 	for i := 1; i < len(d.TopCost); i++ {
 		if d.TopCost[i].Cost > d.TopCost[i-1].Cost {
@@ -103,7 +113,7 @@ func TestDashboard(t *testing.T) {
 	m = upd(m, msg)
 	show("DASHBOARD", m)
 	view := m.View()
-	for _, want := range []string{"Dashboard", "By Project", "By Model", "mystery-model-1", "claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-4-8", "no price"} {
+	for _, want := range []string{"Dashboard", "By Project", "By Model", "mystery-model-1", "claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-4-8", "+ 3.5k tokens from models with no price (mystery-model-1) are not costed"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("dashboard view lacks %q", want)
 		}
