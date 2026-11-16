@@ -222,22 +222,33 @@ func formatBytes(n int64) string {
 	}
 }
 
+// pathSeparator returns the separator a path string uses: a backslash for
+// Windows-style paths (no forward slash present), otherwise "/". It looks at the
+// string, not the host OS, so the same code handles both everywhere.
+func pathSeparator(p string) string {
+	if strings.Contains(p, `\`) && !strings.Contains(p, "/") {
+		return `\`
+	}
+	return "/"
+}
+
 // shortenPath replaces a leading home dir with ~ and, if still wider than
 // max columns, keeps only the trailing path elements that fit, prefixed "…/".
 func shortenPath(p, home string, max int) string {
 	if p == "" {
 		return ""
 	}
-	if home != "" && (p == home || strings.HasPrefix(p, home+"/")) {
+	sep := pathSeparator(p)
+	if home != "" && (p == home || strings.HasPrefix(p, home+sep)) {
 		p = "~" + strings.TrimPrefix(p, home)
 	}
 	if lipgloss.Width(p) <= max {
 		return p
 	}
-	parts := strings.Split(strings.Trim(p, "/"), "/")
+	parts := strings.Split(strings.Trim(p, sep), sep)
 	best := ""
 	for k := 1; k <= len(parts); k++ {
-		cand := "…/" + strings.Join(parts[len(parts)-k:], "/")
+		cand := "…" + sep + strings.Join(parts[len(parts)-k:], sep)
 		if lipgloss.Width(cand) > max {
 			break
 		}

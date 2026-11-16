@@ -74,7 +74,10 @@ type rawContentBlock struct {
 
 // FindSessionFile locates the JSONL file for a session
 func FindSessionFile(claudeDir, project, sessionID string) string {
-	// Convert project path to directory name (C:\repo -> C--repo)
+	// The project argument is not used: Claude Code names project directories
+	// after the working directory (with separators replaced), a mapping that
+	// differs by platform, so every project directory is scanned for the
+	// session file instead. Session IDs are unique, so the first hit is correct.
 	projectsDir := filepath.Join(claudeDir, "projects")
 
 	// Try scanning project dirs

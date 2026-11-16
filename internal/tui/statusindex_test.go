@@ -217,3 +217,25 @@ func TestListCursorStaysVisibleWithIndexBar(t *testing.T) {
 }
 
 func lipglossWidth(s string) int { return lipgloss.Width(s) }
+
+// Windows-style paths use backslashes; the status bar must collapse the home
+// directory and keep the trailing elements there too (on any host OS).
+func TestShortenPath_WindowsStyle(t *testing.T) {
+	home := `C:\Users\a`
+	cases := []struct {
+		in   string
+		max  int
+		want string
+	}{
+		{`C:\Users\a\AppData\Local\claudevu`, 80, `~\AppData\Local\claudevu`},
+		{`C:\Users\a\AppData\Local\claudevu`, 12, `…\claudevu`},
+		{`C:\Users\a`, 80, `~`},
+		{`C:\Users\ab\x`, 80, `C:\Users\ab\x`}, // a sibling directory, not inside home
+		{`D:\data\x`, 80, `D:\data\x`},
+	}
+	for _, c := range cases {
+		if got := shortenPath(c.in, home, c.max); got != c.want {
+			t.Errorf("shortenPath(%q,%d) = %q, want %q", c.in, c.max, got, c.want)
+		}
+	}
+}
