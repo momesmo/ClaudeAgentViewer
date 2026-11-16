@@ -20,17 +20,47 @@ type rawMessage struct {
 }
 
 type rawMessageContent struct {
-	Role    string            `json:"role"`
-	Content json.RawMessage   `json:"content"`
-	Model   string            `json:"model"`
-	Usage   rawUsage          `json:"usage"`
+	ID      string          `json:"id"`
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+	Model   string          `json:"model"`
+	Usage   rawUsage        `json:"usage"`
 }
 
 type rawUsage struct {
-	InputTokens          int `json:"input_tokens"`
-	OutputTokens         int `json:"output_tokens"`
-	CacheCreationTokens  int `json:"cache_creation_input_tokens"`
-	CacheReadTokens      int `json:"cache_read_input_tokens"`
+	InputTokens         int `json:"input_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	CacheCreationTokens int `json:"cache_creation_input_tokens"`
+	CacheReadTokens     int `json:"cache_read_input_tokens"`
+	CacheCreation       struct {
+		Ephemeral5m int `json:"ephemeral_5m_input_tokens"`
+		Ephemeral1h int `json:"ephemeral_1h_input_tokens"`
+	} `json:"cache_creation"`
+	ServerToolUse struct {
+		WebSearchRequests int `json:"web_search_requests"`
+	} `json:"server_tool_use"`
+	Speed        string `json:"speed"`
+	InferenceGeo string `json:"inference_geo"`
+}
+
+// usage converts the raw fields into a billable Usage for model.
+func (u rawUsage) usage(model string) Usage {
+	w5, w1 := splitCacheWrites(u.CacheCreationTokens, u.CacheCreation.Ephemeral5m, u.CacheCreation.Ephemeral1h)
+	return Usage{
+		Model: model, Input: u.InputTokens, Output: u.OutputTokens, CacheRead: u.CacheReadTokens,
+		CacheWrite5m: w5, CacheWrite1h: w1, WebSearches: u.ServerToolUse.WebSearchRequests,
+		Speed: u.Speed, Geo: u.InferenceGeo,
+	}
+}
+
+// tokenUsage converts the raw fields into the exported per-line TokenUsage.
+func (u rawUsage) tokenUsage() TokenUsage {
+	w5, w1 := splitCacheWrites(u.CacheCreationTokens, u.CacheCreation.Ephemeral5m, u.CacheCreation.Ephemeral1h)
+	return TokenUsage{
+		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens,
+		CacheCreationTokens: w5 + w1, CacheWrite5m: w5, CacheWrite1h: w1,
+		WebSearches: u.ServerToolUse.WebSearchRequests, Speed: u.Speed, Geo: u.InferenceGeo,
+	}
 }
 
 type rawContentBlock struct {
@@ -111,12 +141,8 @@ func LoadTranscript(path string) ([]SessionMessage, error) {
 		}
 
 		msg.Model = content.Model
-		msg.Usage = TokenUsage{
-			InputTokens:         content.Usage.InputTokens,
-			OutputTokens:        content.Usage.OutputTokens,
-			CacheCreationTokens: content.Usage.CacheCreationTokens,
-			CacheReadTokens:     content.Usage.CacheReadTokens,
-		}
+		msg.MessageID = content.ID
+		msg.Usage = content.Usage.tokenUsage()
 
 		if raw.Type == "user" {
 			// User content is either a string or array
@@ -183,7 +209,7 @@ func ComputeStats(messages []SessionMessage) SessionStats {
 		ToolsUsed: make(map[string]int),
 	}
 
-	modelSet := make(map[string]bool)
+	tally := NewUsageTally(DefaultBook())
 	var firstTime, lastTime time.Time
 
 	for _, msg := range messages {
@@ -205,14 +231,12 @@ func ComputeStats(messages []SessionMessage) SessionStats {
 		}
 
 		if msg.Type == "assistant" {
-			stats.TotalInputTokens += msg.Usage.InputTokens
-			stats.TotalOutputTokens += msg.Usage.OutputTokens
-			stats.CacheWriteTokens += msg.Usage.CacheCreationTokens
-			stats.CacheReadTokens += msg.Usage.CacheReadTokens
-
-			if msg.Model != "" {
-				modelSet[msg.Model] = true
-			}
+			tally.Add(msg.MessageID, Usage{
+				Model: msg.Model, Input: msg.Usage.InputTokens, Output: msg.Usage.OutputTokens,
+				CacheRead: msg.Usage.CacheReadTokens, CacheWrite5m: msg.Usage.CacheWrite5m,
+				CacheWrite1h: msg.Usage.CacheWrite1h, WebSearches: msg.Usage.WebSearches,
+				Speed: msg.Usage.Speed, Geo: msg.Usage.Geo,
+			})
 
 			for _, block := range msg.Blocks {
 				if block.Type == "tool_use" {
@@ -223,23 +247,11 @@ func ComputeStats(messages []SessionMessage) SessionStats {
 		}
 	}
 
-	for model := range modelSet {
-		stats.Models = append(stats.Models, model)
-	}
-
 	if !firstTime.IsZero() && !lastTime.IsZero() {
 		stats.Duration = lastTime.Sub(firstTime)
 	}
 
-	// Cost estimation using accurate per-model pricing
-	model := ""
-	if len(stats.Models) > 0 {
-		model = stats.Models[0]
-	}
-	stats.EstimatedCostUSD = ComputeCost(
-		stats.TotalInputTokens, stats.TotalOutputTokens,
-		stats.CacheWriteTokens, stats.CacheReadTokens, model)
-
+	tally.Apply(&stats) // tokens, cost and models: each API message counted once, priced per model
 	stats.ComputeEnergy()
 
 	return stats

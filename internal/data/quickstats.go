@@ -9,16 +9,10 @@ import (
 
 // QuickStats reads token usage from a session JSONL without full message parsing.
 // Only scans for "usage" fields in assistant messages — much faster than LoadTranscript.
-type quickUsage struct {
-	InputTokens         int `json:"input_tokens"`
-	OutputTokens        int `json:"output_tokens"`
-	CacheReadTokens     int `json:"cache_read_input_tokens"`
-	CacheCreationTokens int `json:"cache_creation_input_tokens"`
-}
-
 type quickMessage struct {
-	Model string     `json:"model"`
-	Usage quickUsage `json:"usage"`
+	ID    string   `json:"id"`
+	Model string   `json:"model"`
+	Usage rawUsage `json:"usage"`
 }
 
 type quickLine struct {
@@ -74,7 +68,7 @@ func QuickScanStats(path string) (SessionStats, error) {
 	defer f.Close()
 
 	stats := SessionStats{ToolsUsed: make(map[string]int)}
-	modelSet := make(map[string]bool)
+	tally := NewUsageTally(DefaultBook())
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 256*1024), 256*1024)
@@ -105,28 +99,10 @@ func QuickScanStats(path string) (SessionStats, error) {
 		}
 
 		stats.MessageCount++
-		stats.TotalInputTokens += ql.Message.Usage.InputTokens
-		stats.TotalOutputTokens += ql.Message.Usage.OutputTokens
-		stats.CacheWriteTokens += ql.Message.Usage.CacheCreationTokens
-		stats.CacheReadTokens += ql.Message.Usage.CacheReadTokens
-
-		if ql.Message.Model != "" {
-			modelSet[ql.Message.Model] = true
-		}
+		tally.Add(ql.Message.ID, ql.Message.Usage.usage(ql.Message.Model))
 	}
 
-	for model := range modelSet {
-		stats.Models = append(stats.Models, model)
-	}
-
-	// Cost estimation using accurate per-model pricing
-	model := ""
-	if len(stats.Models) > 0 {
-		model = stats.Models[0]
-	}
-	stats.EstimatedCostUSD = ComputeCost(
-		stats.TotalInputTokens, stats.TotalOutputTokens,
-		stats.CacheWriteTokens, stats.CacheReadTokens, model)
+	tally.Apply(&stats) // each API message counted once, priced per model
 
 	// Energy metrics
 	stats.ComputeEnergy()

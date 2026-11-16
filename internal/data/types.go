@@ -31,6 +31,7 @@ type SessionMessage struct {
 	GitBranch string
 	Version   string
 	Model     string
+	MessageID string         // API message ID; every content-block line of one message shares it
 	Content   string         // user: plain text
 	Blocks    []ContentBlock // assistant: structured blocks
 	Usage     TokenUsage
@@ -47,12 +48,17 @@ type ContentBlock struct {
 	AgentType        string // for Agent tool_use: the "subagent_type" field
 }
 
-// TokenUsage tracks token counts from a single assistant message
+// TokenUsage is the usage reported with one assistant transcript line.
 type TokenUsage struct {
-	InputTokens          int `json:"input_tokens"`
-	OutputTokens         int `json:"output_tokens"`
-	CacheCreationTokens  int `json:"cache_creation_input_tokens"`
-	CacheReadTokens      int `json:"cache_read_input_tokens"`
+	InputTokens         int
+	OutputTokens        int
+	CacheCreationTokens int // 5-minute + 1-hour cache writes
+	CacheReadTokens     int
+	CacheWrite5m        int
+	CacheWrite1h        int
+	WebSearches         int
+	Speed               string // "standard" or "fast"
+	Geo                 string // inference_geo: "global" or "us"
 }
 
 // SessionStats aggregates stats across an entire session transcript
@@ -65,8 +71,15 @@ type SessionStats struct {
 	MessageCount      int
 	ToolCallCount     int
 	Duration          time.Duration
-	Models            []string
+	Models            []string // most expensive first
 	ToolsUsed         map[string]int
+
+	// Cost details (see UsageTally). EstimatedCostUSD excludes unpriced models.
+	CostEstimated  bool         // some model was priced by family fallback (an estimate)
+	UnpricedModels []string     // models with no known price
+	UnpricedTokens int          // tokens belonging to unpriced models (cost unknown, not zero)
+	PricingAsOf    string       // date of the price table used
+	ModelBreakdown []ModelUsage // per-model messages, tokens and cost
 	// Energy metrics (ccwatt-style)
 	EnergyKWh   float64 // estimated energy consumption
 	CO2Kg       float64 // estimated CO2 emissions
