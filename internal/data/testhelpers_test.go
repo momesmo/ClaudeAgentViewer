@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -29,4 +30,13 @@ func writeTemp(t *testing.T, content string) string {
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	writeFile(t, p, content)
 	return p
+}
+
+// skipUnixPermBitsOnWindows is a platform skip, not a data skip: Windows has
+// no 0600/0700 permission bits to assert.
+func skipUnixPermBitsOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission bits (0600/0700) are not meaningful on Windows")
+	}
 }

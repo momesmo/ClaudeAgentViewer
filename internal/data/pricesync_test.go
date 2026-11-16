@@ -260,6 +260,7 @@ func TestFetchPricing_CustomUserAgent(t *testing.T) {
 // --- storage -----------------------------------------------------------------
 
 func TestCacheRoundTripAndPerms(t *testing.T) {
+	skipUnixPermBitsOnWindows(t)
 	dir := filepath.Join(t.TempDir(), "cache")
 	if _, ok := LoadPricingCache(dir); ok {
 		t.Fatal("empty dir should miss")

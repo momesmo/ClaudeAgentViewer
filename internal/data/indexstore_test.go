@@ -68,6 +68,7 @@ func TestSaveIndex_RedactsSecrets(t *testing.T) {
 }
 
 func TestSaveIndex_PermsAndAtomic(t *testing.T) {
+	skipUnixPermBitsOnWindows(t)
 	dir := filepath.Join(t.TempDir(), "sub")
 	if err := SaveIndex(dir, "c", map[string]IndexEntry{"a": {Blob: "x"}}); err != nil {
 		t.Fatal(err)
@@ -98,6 +99,7 @@ func TestClearIndex(t *testing.T) {
 }
 
 func TestSaveIndex_DoesNotChmodExistingDir(t *testing.T) {
+	skipUnixPermBitsOnWindows(t)
 	dir := t.TempDir()
 	os.Chmod(dir, 0o755)
 	SaveIndex(dir, "c", map[string]IndexEntry{"a": {Blob: "x"}})
