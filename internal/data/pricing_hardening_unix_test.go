@@ -3,28 +3,12 @@
 package data
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 )
-
-func writeFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func parseFloatNoComma(s string) (float64, error) {
-	var v float64
-	_, err := fmt.Sscanf(s, "%g", &v)
-	return v, err
-}
-
-func trimFloat(v float64) string { return fmt.Sprintf("%g", v) }
 
 // A FIFO or device in place of a cache/override file must never hang startup.
 func TestLocalFilesThatAreNotRegularNeverHang(t *testing.T) {
