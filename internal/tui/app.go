@@ -1426,7 +1426,8 @@ func (m Model) renderStatusBar() string {
 		bar += "  " + toolLabelStyle.Render("[PRIVACY]")
 	}
 	if m.statusMsg != "" && time.Now().Before(m.statusExpires) {
-		bar += "  " + assistantLabelStyle.Render(m.statusMsg)
+		// first, so truncation on a narrow terminal drops key hints, not the confirmation
+		bar = assistantLabelStyle.Render(m.statusMsg) + "  " + bar
 	}
 
 	return statusBarStyle.Width(m.width).MaxHeight(1).Render(bar) // never wrap: a 2nd row overflows the terminal
