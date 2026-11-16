@@ -579,6 +579,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PricingRefreshedMsg:
 		return m.handlePricingRefreshed(msg)
 
+	case ClipboardCopiedMsg:
+		if msg.Err != nil {
+			m.setStatus("Copy failed: " + truncateRunes(msg.Err.Error(), 80))
+		} else {
+			m.setStatus("Copied " + msg.What)
+		}
+		return m, nil
+
 	case FlaggedRefreshMsg:
 		// Update cached stats for flagged sessions
 		var priceCmd tea.Cmd
@@ -823,11 +831,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, keys.Copy):
 			if m.selectedInfo != nil {
-				if err := copyToClipboard(m.selectedInfo.SessionID); err != nil {
-					m.setStatus("Copy failed: " + err.Error())
-				} else {
-					m.setStatus("Copied session ID")
-				}
+				return m, copyToClipboardCmd(m.selectedInfo.SessionID, "session ID")
 			}
 			return m, nil
 
@@ -1611,20 +1615,56 @@ func clipboardCommand(goos string, getenv func(string) string, lookPath func(str
 	return "", nil, errors.New("no clipboard tool found (install wl-clipboard, xclip or xsel)")
 }
 
-// copyToClipboard writes text to the system clipboard via stdin (never
-// interpolated into a shell string).
-func copyToClipboard(text string) error {
+// clipboardTimeout bounds how long a clipboard tool may run. xclip, xsel and
+// wl-copy can wedge (no X server answering, a stuck selection owner), and the
+// UI must never wait on them.
+const clipboardTimeout = 3 * time.Second
+
+// ClipboardCopiedMsg reports the outcome of a background copy.
+type ClipboardCopiedMsg struct {
+	What string // what was copied, for the status line
+	Err  error
+}
+
+// newClipboardCmd builds the clipboard subprocess. The text goes ONLY on stdin:
+// it is never part of the command name or arguments, and no shell is involved.
+// WaitDelay stops a tool that forks and keeps our pipes open from holding Wait.
+func newClipboardCmd(ctx context.Context, name string, args []string, text string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = strings.NewReader(text)
+	cmd.Env = os.Environ()
+	cmd.WaitDelay = 500 * time.Millisecond
+	return cmd
+}
+
+// runClipboardCmd runs the tool and returns a short, safe error (no tool output
+// is echoed, so nothing from stderr can reach the status line).
+func runClipboardCmd(ctx context.Context, name string, args []string, text string) error {
+	if err := newClipboardCmd(ctx, name, args, text).Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("%s timed out", name)
+		}
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// copyToClipboard writes text to the system clipboard through the platform tool.
+func copyToClipboard(ctx context.Context, text string) error {
 	name, args, err := clipboardCommand(runtime.GOOS, os.Getenv, exec.LookPath)
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(name, args...)
-	cmd.Stdin = strings.NewReader(text)
-	cmd.Env = os.Environ()
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s: %w", name, err)
+	return runClipboardCmd(ctx, name, args, text)
+}
+
+// copyToClipboardCmd copies in the background so the UI never blocks on the tool.
+func copyToClipboardCmd(text, what string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), clipboardTimeout)
+		defer cancel()
+		return ClipboardCopiedMsg{What: what, Err: copyToClipboard(ctx, text)}
 	}
-	return nil
 }
 
 // IndexSaveDoneMsg reports a finished cache save (Err non-nil on failure; non-fatal).

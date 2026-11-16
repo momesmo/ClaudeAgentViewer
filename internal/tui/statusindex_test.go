@@ -233,6 +233,9 @@ func TestShortenPath_WindowsStyle(t *testing.T) {
 		{`C:\Users\ab\x`, 80, `C:\Users\ab\x`}, // a sibling directory, not inside home
 		{`D:\data\x`, 80, `D:\data\x`},
 	}
+	if got := shortenPath(`C:\Users\a\AppData`, `C:\Users\a\`, 80); got != `~\AppData` {
+		t.Errorf("a home with a trailing separator must still collapse, got %q", got)
+	}
 	for _, c := range cases {
 		if got := shortenPath(c.in, home, c.max); got != c.want {
 			t.Errorf("shortenPath(%q,%d) = %q, want %q", c.in, c.max, got, c.want)

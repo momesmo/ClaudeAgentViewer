@@ -239,6 +239,9 @@ func shortenPath(p, home string, max int) string {
 		return ""
 	}
 	sep := pathSeparator(p)
+	if len(home) > 1 {
+		home = strings.TrimRight(home, `\/`) // "C:\Users\a\" and "/home/a/" both mean the same home
+	}
 	if home != "" && (p == home || strings.HasPrefix(p, home+sep)) {
 		p = "~" + strings.TrimPrefix(p, home)
 	}
