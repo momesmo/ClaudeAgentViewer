@@ -1429,7 +1429,7 @@ func (m Model) renderStatusBar() string {
 		bar += "  " + assistantLabelStyle.Render(m.statusMsg)
 	}
 
-	return statusBarStyle.Width(m.width).Render(bar)
+	return statusBarStyle.Width(m.width).MaxHeight(1).Render(bar) // never wrap: a 2nd row overflows the terminal
 }
 
 func (m Model) renderHelp() string {
