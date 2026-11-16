@@ -28,7 +28,7 @@ Note: the root-package tests (`render_test.go`, `screenshot_test.go`, ...) run a
 
 ## Architecture
 
-`claudevu` is a Bubble Tea TUI that reads Claude Code's local session data from `~/.claude/` — no writes (except the opt-in index cache under the user cache dir, never `~/.claude/`), no network.
+`claudevu` is a Bubble Tea TUI that reads Claude Code's local session data from `~/.claude/` — no writes (except the opt-in index cache under the user cache dir, never `~/.claude/`), no network except the opt-in price refresh (`--update-pricing`, `--pricing-auto`).
 
 **Entry point** (`main.go`): Starts the Bubble Tea program, then after the TUI exits checks `m.ResumeSessionID` — if set, execs `claude --resume <id>`. Resume is the only side-effect the TUI triggers on the host, apart from the opt-in index cache (`--index-cache`, `--clear-cache`, `--cache-dir`, `CLAUDEVU_INDEX_CACHE`), which writes under the user cache dir.
 
@@ -39,6 +39,10 @@ Note: the root-package tests (`render_test.go`, `screenshot_test.go`, ...) run a
 - `types.go` — shared structs (`SessionInfo`, `SessionStats`, `SubagentInfo`, `ProjectGroup`)
 - `pricing.go` — per-model token rates; `ComputeStats` applies them to produce cost + energy metrics
 - `dashboard.go` — `BuildDashboard` aggregates stats across all sessions for the `d` view
+- `pricebook.go` — `PriceBook` (per-model rates + modifiers), `Lookup` (exact / normalized / family fallback / none), `Cost`, `Validate`, `Merge`; embedded `pricing_table.json` (dated). `EmbeddedBook()` is the fixed baseline; `DefaultBook()`/`SetDefaultBook()` is the layered book in use
+- `usage.go` — `UsageTally`: counts each API message once (by `message.id`), prices per message by its own model, splits 5m/1h cache writes; fills `SessionStats` (cost, `CostEstimated`, `UnpricedModels`, `ModelBreakdown`). Both `ComputeStats` and `QuickScanStats` use it
+- `linescan.go` — `lineScanner`: JSONL reader that skips oversized lines instead of aborting (bufio.Scanner stopped at the first line over its buffer and silently dropped the rest of a session)
+- `pricesync.go` / `pricerefresh.go` — opt-in price refresh: markdown parser (reads columns by header), hardened fetcher (https, allowlist, size/time caps), cache/state/override files, `LayeredBook`, `RefreshPricingVetted` (refuses >3x or >25% changes unless accepted). See `docs/pricing.md`
 - `privacy.go` — regex-based secret redaction (`RedactSecrets` for display in `message_render.go`; `RedactSecretsFold` for lowercased search blobs before they are written to the index cache). Best-effort; rules carry lowercase `hints` that skip regexes cheaply, and must not use uppercase regex escapes (`TestRedactRulesFoldSafe`)
 - `searchblob.go` — `BuildIndexEntry`: per-session lowercase content blob (prompts, assistant text, tool names; branch/model only when they change; not thinking or tool results). Capped at `MaxBlobBytes` (256 KB) as head (first `HeadBytes`=64 KB, read forward) + tail (most recent text, read backwards from EOF in `tailChunkBytes` chunks). Lines over `maxLineBytes` (1 MiB) are cut and their message text salvaged (`salvageText`); oversize tool results are ignored. Skips re-reading a file whose mod-time is unchanged. Bump `IndexVersion` when this changes
 - `searchmatch.go` — `MatchSession` / `FillSearchMeta`: metadata vs content matching

@@ -54,27 +54,81 @@ input). Model IDs look like `claude-opus-5-5`.
 ```
 
 An invalid override file is ignored as a whole, with a warning. A missing file
-is not a problem.
+is not a problem. An override for a model that has a long-context tier (Claude
+Haiku 5.5) keeps that tier unless you supply your own, so long prompts are not
+silently under-priced.
 
-## Fetching
+## How costs are computed
 
-Nothing is fetched unless the user opts in. When they do, `FetchPricing` reads
-the pricing page markdown
+- Each API message is counted **once**. Claude Code writes one transcript line
+  per content block (thinking, text, each tool call) and every line repeats the
+  whole message's usage, so lines sharing a `message.id` are deduplicated.
+- Each message is priced with **its own model**, so a session that mixes models
+  is costed correctly. Cache writes are priced at the 5-minute or 1-hour rate
+  using the per-TTL breakdown in the transcript.
+- Published modifiers stack on top: fast mode (`speed: "fast"`, x2), US-only
+  inference (`inference_geo: "us"`, x1.1, Claude 4.6 and later), Claude Haiku
+  5.5's higher rates above 100,000 prompt tokens, and web searches ($10 per
+  1,000).
+- Model matching: exact ID, then after stripping a date snapshot, `-latest`,
+  `[1m]`, a provider prefix (`anthropic.`, `us.anthropic.`) or a Bedrock
+  `-v1:0` suffix. An unknown version of a known family (for example
+  `claude-opus-5-9`) is priced like the nearest known model and shown with a
+  `~` as an estimate. A model with no match at all (a non-Claude model, say) is
+  **unpriced**: it is not counted as free. Costs show a `+` when some tokens
+  could not be priced, and the detail pane lists the models.
+
+## Fetching (opt-in)
+
+Nothing is fetched unless you opt in, in one of two ways:
+
+- `claudevu --update-pricing` fetches once, prints what changed, and exits.
+- `--pricing-auto` (or `CLAUDEVU_PRICING_AUTO=1`) lets the TUI refresh once in
+  the background when it meets a model without an exact price, and no more than
+  once every 24 hours (failures and refusals count as attempts).
+
+`--pricing-source <https URL>` selects a different page; it is trusted only for
+its own host. Nothing but the cache and attempt-state files is written, in the
+cache directory (never `~/.claude`). `--clear-cache` removes them too.
+
+`FetchPricing` reads the pricing page markdown
 (`https://platform.claude.com/docs/en/about-claude/pricing.md`) under these
 rules:
 
-- HTTPS only; no credentials in the URL.
-- The host must be in `AllowHosts` (default: platform.claude.com,
-  docs.anthropic.com, claude.com, www.anthropic.com). A custom URL works only if
-  the caller lists its host explicitly.
+- HTTPS only; no credentials in the URL; ASCII host names only.
+- The host must be in the allowlist (default: platform.claude.com only). A plain
+  entry allows port 443; an entry like `host:8443` allows exactly that port.
 - Redirects: at most 3, same host, https only.
-- Response capped at 2 MiB (error if exceeded); 10 s timeout.
+- Response capped at 2 MiB, enforced on the decompressed body; 10 s timeout.
 - Only the header `User-Agent: claudevu-pricing/1` is sent. No cookies, auth or
   anything derived from your sessions or model names.
-- Status must be 200 and Content-Type text (or markdown).
-- Plausibility guard: the page must yield at least 15 models and at least 80%
-  of the embedded model IDs, or the result is rejected (never a partial book).
-- Failures write only the state file; the cache is never partially written.
+- Status must be 200 and Content-Type `text/markdown`, `text/plain` or
+  `application/(x-)markdown` (or absent).
+- The table is read by **header name**, not column position, and price cells
+  must be plain `$X / MTok` numbers (locale commas such as `$0,5` are rejected).
+- Plausibility: at least 15 models and at least 80% of the embedded model IDs;
+  any model not in the embedded table must have a believable price structure
+  (cache write 1.1-1.5x input, 1h write 1.5-2.5x, cache read 0.01-0.25x, output
+  2-10x, input between $0.02 and $200 per million).
+
+### Vetting before anything is applied
+
+`RefreshPricingVetted` compares the fetched table with the table currently in
+use and **refuses** (counts it as an attempt, writes no cache, tells you how to
+review) when:
+
+- any existing model's price moves by more than **3x** in either direction, or
+- more than **25%** of the models you already have change at all.
+
+Review the changes with `claudevu --update-pricing`; if they are right, apply
+them with `--update-pricing --accept-price-changes`.
+
+### Local files are read defensively
+
+The cache, state and override files must be regular files of at most 1 MiB;
+FIFOs, devices and huge files are reported as problems and ignored, so a bad
+file can never hang or crash startup. A cache dated in the future, or older than
+the built-in table, is ignored.
 
 ## Regenerating the embedded table
 

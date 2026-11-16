@@ -140,17 +140,31 @@ claudevu reads Claude Code's local session data:
 - `~/.claude/projects/[project]/[sessionId].jsonl` — full transcripts
 - `~/.claude/projects/[project]/[sessionId]/subagents/` — subagent data
 
-No data leaves your machine. Everything is read-only, except the optional index cache (see "Index cache (opt-in)" above).
+No data leaves your machine, and claudevu never sends anything about your sessions. Everything is read-only, with two opt-in exceptions: the search index cache (see "Index cache (opt-in)" above) and a price refresh (see "Pricing" below), which is the only thing that uses the network and only when you ask for it.
+
+### Pricing
+
+Costs come from a price table built from Anthropic's published rates (embedded in the binary, dated in the status bar and on the dashboard). The table is applied per API message, so mixed-model sessions are costed correctly. Cache writes are split into 5-minute and 1-hour rates, fast mode and US-only inference multipliers are applied, and each message is counted once even though Claude Code logs it as several lines.
+
+- A `~` before a cost means some model was priced by family because its exact version isn't in the table; a `+` means some tokens belong to a model with **no known price** and are not included (the detail pane names it).
+- `claudevu --update-pricing` fetches the current prices once (the only network use), shows what changed, and exits. Large price swings are refused until you review them and pass `--accept-price-changes`.
+- `--pricing-auto` / `CLAUDEVU_PRICING_AUTO=1` opts in to a background refresh, at most once a day, when a model without an exact price shows up.
+- You can override or add prices in `<user config dir>/claudevu/pricing-overrides.json`.
+
+Details, safety rules and file formats: [docs/pricing.md](docs/pricing.md).
 
 ### Cost Calculation
 
-Costs are calculated using Anthropic's published per-model rates:
+Rates are USD per million tokens, as published by Anthropic (see `internal/data/pricing_table.json` for the full table and its date). Examples of the current rates:
 
-| Model | Input/1M | Output/1M | Cache Write/1M | Cache Read/1M |
-|-------|----------|-----------|-----------------|---------------|
-| Opus 4.6 | $15.00 | $75.00 | $18.75 | $1.50 |
-| Sonnet 4.6 | $3.00 | $15.00 | $3.75 | $0.30 |
-| Haiku 4.5 | $0.80 | $4.00 | $1.00 | $0.08 |
+| Model | Input/1M | Output/1M | Cache Write 5m/1M | Cache Write 1h/1M | Cache Read/1M |
+|-------|----------|-----------|-------------------|-------------------|---------------|
+| Opus 5.5 | $4.00 | $20.00 | $5.00 | $8.00 | $0.20 |
+| Opus 4.8 | $5.00 | $25.00 | $6.25 | $10.00 | $0.50 |
+| Sonnet 5.5 | $2.00 | $10.00 | $2.50 | $4.00 | $0.10 |
+| Haiku 5.5 (prompts up to 100K tokens) | $0.10 | $0.50 | $0.125 | $0.20 | $0.01 |
+
+Cache-read prices are not a flat share of input: they range from 0.025x to 0.1x depending on the model.
 
 ### Environment Metrics
 

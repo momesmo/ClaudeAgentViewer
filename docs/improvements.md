@@ -17,7 +17,7 @@ A living list of improvement ideas. Edit it as decisions are made.
 - Effort: **S** (under half a day), **M** (a day or two), **L** (more).
 - Priority: **H** / **M** / **L**.
 
-_Last updated: 2026-11-13_
+_Last updated: 2026-11-16_
 
 ---
 
@@ -25,8 +25,7 @@ _Last updated: 2026-11-13_
 
 - [ ] **R-01 (H, S) Mark sessions with no transcript.**
   History lists 213 sessions but only 27 have a transcript file; the other 186 show in the tree with nothing behind them, and the dashboard counts 27. Dim them, label "transcript missing", add a toggle to hide them. Check that resume is handled for them.
-- [ ] **R-02 (H, M) Per-version pricing with a visible fallback.**
-  `pricing.go` matches only the substring "opus"/"sonnet"/"haiku" and prices unknown models as Sonnet. Use an exact model table; show "price unknown" instead of guessing; allow an override file. Re-verify the README pricing table against current published rates.
+- [x] **R-02 (H, M) Per-version pricing with a visible fallback.** Done 2026-11-16: exact per-model table generated from the published page (with a dated embedded copy), per-message pricing, 5m/1h cache-write split, fast/US-geo/long-context/web-search modifiers, family-fallback estimates (`~`) and unpriced models (`+`), opt-in refresh (`--update-pricing`, `--pricing-auto`) with vetting, override file. Also fixed: messages counted once per API message (was ~2x), mixed-model sessions, and oversized transcript lines truncating the scan. See `docs/pricing.md`.
 - [ ] **R-16 (H, M) Tests that don't depend on the real `~/.claude`.**
   The root-package tests read live data, which hid the `truncate` panic and makes results vary by machine. Move them to a fixture directory.
 - [ ] **R-17 (M, S) `gofmt` the repo and split `app.go`** (about 1,600 lines) into model / update / render / commands. Do the formatting pass in its own commit so diffs stay readable.
@@ -86,6 +85,12 @@ _Last updated: 2026-11-13_
 - [ ] **C-06 (L, S)** Stale "cache save failed" status can linger after a later successful save; redundant `IndexCache` check in the save-done handler; a pending dirty save is lost on quit.
 - [ ] **C-07 (L, S)** `IndexPath` and `indexPath` duplicate each other; `--clear-cache` exits 1 when no cache directory can be determined.
 
+- [ ] **R-34 (M, S) "Messages" count means transcript lines, not API messages.** The Activity > Messages figure still counts every assistant transcript line (one per content block). Decide whether to show API messages, conversation turns, or both.
+- [ ] **R-35 (L, S) Concurrent price refreshes.** Two claudevu processes can both fetch and race on the attempt-state file (files never tear; one attempt count may be lost). An advisory lock would serialize them.
+- [ ] **R-36 (L, S) Pricing file housekeeping.** Temp files from a crashed pricing write are not swept; an existing cache directory with looser permissions is not tightened; the directory is not fsynced after rename.
+- [ ] **R-37 (M, S) Show what a price refresh changed in the TUI.** `--update-pricing` prints the changes; the background refresh only says "prices updated (N changed)". Add a view (or a log line in the detail pane) listing them.
+- [ ] **R-38 (L, S) Subagent transcripts are not priced separately.** Subagent sessions are read via their own transcript files; check that their cost is rolled into the parent session total and shown.
+
 ## 8. Won't do / rejected
 
 _(none yet)_
@@ -94,6 +99,7 @@ _(none yet)_
 
 ## Completed
 
+- [x] **Accurate cost accounting and pricing (R-02).** Messages counted once, priced per model, 5m/1h cache writes, modifiers, estimates and unpriced models flagged, opt-in hardened price refresh with vetting; per-model dashboard; fixed oversized-line truncation (Opus 4.8 showed 50 of 331 messages). Verified: Go and an independent script agree to the cent on real data.
 - [x] **Opt-in on-disk index cache** with `--index-cache`, `--clear-cache`, `--cache-dir`, `CLAUDEVU_INDEX_CACHE`; redaction on save; `--cache-dir` refused inside `~/.claude`. _(deep-search work, 2026-11-13)_
 - [x] **Content search with a background index** and a `[content]` hint. _(2026-11-13)_
 - [x] **Index status bar** (cache on/off and path, index progress, save state, filter count), shown above the key hints; pane height overflow fixed. _(`4c2aedd`, reordered in `9fa13da`)_
@@ -109,3 +115,4 @@ _(none yet)_
 Add one line per change: date, item ID, what changed, why.
 
 - 2026-11-13: List created from a code review of the app.
+- 2026-11-16: R-02 done (see Completed). Found while doing it: every message was counted ~2x (usage repeated on each content-block line); dashboard cost dropped from ~$1,216 to the true figure. Added R-34 to R-38.
