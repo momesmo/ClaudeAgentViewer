@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,7 +16,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,7 +29,7 @@ var (
 	supRE       = regexp.MustCompile(`(?is)<sup>.*?</sup>`)
 	nameRE      = regexp.MustCompile(`(?i)^\s*claude\s+([a-z]+)\s+(\d+(?:\.\d+)*)\b`)
 	overRE      = regexp.MustCompile(`(?i)\bover\s+([\d,]+)\s+tokens`)
-	priceCellRE = regexp.MustCompile(`^\$\s*(\d[\d,]*(?:\.\d+)?|\.\d+)\s*(?:USD\s*)?/\s*MTok\b`)
+	priceCellRE = regexp.MustCompile(`^\$\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)\s*(?:USD\s*)?/\s*MTok\b`)
 	sepCellRE   = regexp.MustCompile(`^:?-+:?$`)
 )
 
@@ -70,6 +73,10 @@ func ParsePricingMarkdown(md []byte, source, asOf string) (*PriceBook, error) {
 	if hdr < 0 {
 		return nil, errors.New("pricing page: model table not found (layout changed?)")
 	}
+	col, err := headerColumns(splitRow(strings.TrimSpace(lines[hdr])))
+	if err != nil {
+		return nil, err
+	}
 	std := map[string]Rate{}
 	lc := map[string]LongContextRate{}
 	for i := hdr + 1; i < len(lines); i++ {
@@ -90,19 +97,19 @@ func ParsePricingMarkdown(md []byte, source, asOf string) (*PriceBook, error) {
 		if !modelKeyRE.MatchString(id) {
 			continue
 		}
-		if len(cells) < 6 {
-			return nil, fmt.Errorf("pricing page: row %q has %d cells, want 6", strings.TrimSpace(name), len(cells))
+		if len(cells) <= col[maxIdx(col)] {
+			return nil, fmt.Errorf("pricing page: row %q has %d cells, want at least %d", clip(strings.TrimSpace(name)), len(cells), col[maxIdx(col)]+1)
 		}
 		var p [5]float64
 		for j := 0; j < 5; j++ {
-			c := strings.TrimSpace(supRE.ReplaceAllString(cells[j+1], ""))
+			c := strings.TrimSpace(supRE.ReplaceAllString(cells[col[j]], ""))
 			pm := priceCellRE.FindStringSubmatch(c)
 			if pm == nil {
-				return nil, fmt.Errorf("pricing page: row %q column %d: cannot parse price %q", strings.TrimSpace(name), j+2, c)
+				return nil, fmt.Errorf("pricing page: row %q column %d: cannot parse price %q", clip(strings.TrimSpace(name)), col[j]+1, clip(c))
 			}
 			v, err := strconv.ParseFloat(strings.ReplaceAll(pm[1], ",", ""), 64)
 			if err != nil {
-				return nil, fmt.Errorf("pricing page: row %q column %d: bad price %q", strings.TrimSpace(name), j+2, c)
+				return nil, fmt.Errorf("pricing page: row %q column %d: bad price %q", clip(strings.TrimSpace(name)), col[j]+1, clip(c))
 			}
 			p[j] = v
 		}
@@ -110,7 +117,7 @@ func ParsePricingMarkdown(md []byte, source, asOf string) (*PriceBook, error) {
 		if om := overRE.FindStringSubmatch(name); om != nil {
 			n, err := strconv.Atoi(strings.ReplaceAll(om[1], ",", ""))
 			if err != nil {
-				return nil, fmt.Errorf("pricing page: row %q: bad token threshold %q", strings.TrimSpace(name), om[1])
+				return nil, fmt.Errorf("pricing page: row %q: bad token threshold %q", clip(strings.TrimSpace(name)), clip(om[1]))
 			}
 			if _, dup := lc[id]; dup {
 				return nil, fmt.Errorf("pricing page: duplicate long-context row for %s", id)
@@ -140,7 +147,7 @@ func ParsePricingMarkdown(md []byte, source, asOf string) (*PriceBook, error) {
 			return nil, fmt.Errorf("pricing page: long-context row for %s has no standard row", id)
 		}
 	}
-	b := &PriceBook{Version: 1, Source: source, AsOf: asOf, Modifiers: DefaultBook().Modifiers, Models: models}
+	b := &PriceBook{Version: 1, Source: source, AsOf: asOf, Modifiers: EmbeddedBook().Modifiers, Models: models}
 	if err := b.Validate(); err != nil {
 		return nil, err
 	}
@@ -161,7 +168,7 @@ const (
 	maxRedirects    = 3
 )
 
-var defaultAllowHosts = []string{"platform.claude.com", "docs.anthropic.com", "claude.com", "www.anthropic.com"}
+var defaultAllowHosts = []string{"platform.claude.com"}
 
 // FetchOptions controls FetchPricing. Zero values select safe defaults.
 type FetchOptions struct {
@@ -173,9 +180,21 @@ type FetchOptions struct {
 	UserAgent  string
 }
 
-func hostAllowed(host string, allow []string) bool {
+// hostAllowed checks u's host against the allowlist. A plain entry
+// ("example.org") permits only the default HTTPS port; an entry with a port
+// ("example.org:8443") permits exactly that port and is how a deliberate mirror
+// on a non-standard port is configured.
+func hostAllowed(u *url.URL, allow []string) bool {
+	host, port := strings.ToLower(u.Hostname()), u.Port()
 	for _, a := range allow {
-		if strings.EqualFold(a, host) {
+		a = strings.ToLower(a)
+		if h, p, err := net.SplitHostPort(a); err == nil {
+			if h == host && p == port {
+				return true
+			}
+			continue
+		}
+		if a == host && (port == "" || port == "443") {
 			return true
 		}
 	}
@@ -190,8 +209,11 @@ func textContentType(ct string) bool {
 	if err != nil {
 		return false
 	}
-	mt = strings.ToLower(mt)
-	return strings.HasPrefix(mt, "text/") || mt == "application/markdown" || mt == "application/x-markdown"
+	switch strings.ToLower(mt) {
+	case "text/markdown", "text/x-markdown", "text/plain", "application/markdown", "application/x-markdown":
+		return true
+	}
+	return false
 }
 
 // FetchPricing downloads and parses the pricing page under strict safety rules.
@@ -221,8 +243,11 @@ func FetchPricing(ctx context.Context, o FetchOptions) (*PriceBook, error) {
 	if u.User != nil {
 		return nil, errors.New("pricing fetch: URL must not contain credentials")
 	}
-	if !hostAllowed(u.Hostname(), o.AllowHosts) {
-		return nil, fmt.Errorf("pricing fetch: host %q is not in the allowlist", u.Hostname())
+	if !isASCII(u.Hostname()) {
+		return nil, fmt.Errorf("pricing fetch: host %q is not plain ASCII", clip(u.Hostname()))
+	}
+	if !hostAllowed(u, o.AllowHosts) {
+		return nil, fmt.Errorf("pricing fetch: host %q is not in the allowlist", clip(u.Host))
 	}
 	var client http.Client
 	if o.Client != nil {
@@ -253,10 +278,10 @@ func FetchPricing(ctx context.Context, o FetchOptions) (*PriceBook, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("pricing fetch: unexpected status %s", resp.Status)
+		return nil, fmt.Errorf("pricing fetch: unexpected status %q", clip(resp.Status))
 	}
 	if !textContentType(resp.Header.Get("Content-Type")) {
-		return nil, fmt.Errorf("pricing fetch: unexpected content type %q", resp.Header.Get("Content-Type"))
+		return nil, fmt.Errorf("pricing fetch: unexpected content type %q", clip(resp.Header.Get("Content-Type")))
 	}
 	if resp.ContentLength > o.MaxBytes {
 		return nil, fmt.Errorf("pricing fetch: response larger than %d bytes", o.MaxBytes)
@@ -282,7 +307,7 @@ func checkPlausible(b *PriceBook) error {
 	if len(b.Models) < 15 {
 		return fmt.Errorf("pricing fetch: only %d models found; page layout probably changed", len(b.Models))
 	}
-	known := DefaultBook().Models
+	known := EmbeddedBook().Models
 	have := 0
 	for id := range known {
 		if _, ok := b.Models[id]; ok {
@@ -292,7 +317,133 @@ func checkPlausible(b *PriceBook) error {
 	if len(known) > 0 && float64(have) < 0.8*float64(len(known)) {
 		return fmt.Errorf("pricing fetch: only %d of %d known models found; page layout probably changed", have, len(known))
 	}
+	// A model we have never seen must still look like a real price list entry.
+	for id, mp := range b.Models {
+		if _, ok := known[id]; ok {
+			continue
+		}
+		r := mp.Rate
+		if !between(r.Input, 0.02, 200) || !between(r.CacheWrite5m/r.Input, 1.1, 1.5) || !between(r.CacheWrite1h/r.Input, 1.5, 2.5) ||
+			!between(r.CacheRead/r.Input, 0.01, 0.25) || !between(r.Output/r.Input, 2, 10) {
+			return fmt.Errorf("pricing fetch: new model %s has an implausible price structure %+v", id, r)
+		}
+	}
 	return nil
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+// clip shortens text that came from the network before it is put in an error.
+func clip(s string) string { return cleanText(s, 80) }
+
+// cleanText makes untrusted text safe to store and show: control characters
+// and terminal escapes become '?', and it is cut to max runes.
+func cleanText(s string, max int) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if n >= max {
+			b.WriteString("…")
+			break
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || !utf8.ValidRune(r) {
+			r = '?'
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
+}
+
+// headerColumns maps the page's header cells to rate columns, in the order
+// input, 5m cache write, 1h cache write, cache read, output. It fails if any is
+// missing or ambiguous, so a reordered table can never be read by position.
+func headerColumns(cells []string) ([5]int, error) {
+	var col [5]int
+	for i := range col {
+		col[i] = -1
+	}
+	assign := func(slot, idx int) error {
+		if col[slot] != -1 {
+			return fmt.Errorf("pricing page: ambiguous header %q", clip(cells[idx]))
+		}
+		col[slot] = idx
+		return nil
+	}
+	for i, c := range cells {
+		l := strings.ToLower(c)
+		var err error
+		switch {
+		case strings.Contains(l, "base input"):
+			err = assign(0, i)
+		case strings.Contains(l, "5m") && strings.Contains(l, "write"):
+			err = assign(1, i)
+		case strings.Contains(l, "1h") && strings.Contains(l, "write"):
+			err = assign(2, i)
+		case strings.Contains(l, "cache hit") || strings.Contains(l, "cache read"):
+			err = assign(3, i)
+		case strings.Contains(l, "output"):
+			err = assign(4, i)
+		}
+		if err != nil {
+			return col, err
+		}
+	}
+	for _, c := range col {
+		if c == -1 {
+			return col, errors.New("pricing page: model table header lacks an expected price column (layout changed?)")
+		}
+	}
+	return col, nil
+}
+
+func maxIdx(col [5]int) int {
+	m := 0
+	for i := range col {
+		if col[i] > col[m] {
+			m = i
+		}
+	}
+	return m
+}
+
+const maxLocalFile = 1 << 20 // 1 MiB: cache, state and override files are tiny
+
+// readSmallFile reads a local config/cache file defensively: it must be a
+// regular file (a FIFO or device would hang or never end), at most maxLocalFile
+// bytes, and the open is non-blocking so a FIFO swapped in after the check
+// cannot stall startup.
+func readSmallFile(path string) ([]byte, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", filepath.Base(path))
+	}
+	if fi.Size() > maxLocalFile {
+		return nil, fmt.Errorf("%s is larger than %d bytes", filepath.Base(path), maxLocalFile)
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxLocalFile+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxLocalFile {
+		return nil, fmt.Errorf("%s is larger than %d bytes", filepath.Base(path), maxLocalFile)
+	}
+	return data, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -359,7 +510,7 @@ func SavePricingCache(cacheDir string, b *PriceBook) error {
 }
 
 func readCache(cacheDir string) (*PriceBook, string) {
-	data, err := os.ReadFile(filepath.Join(cacheDir, cacheFileName))
+	data, err := readSmallFile(filepath.Join(cacheDir, cacheFileName))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ""
@@ -390,7 +541,7 @@ type PricingState struct {
 // LoadPricingState returns the stored state, or the zero state if absent or corrupt.
 func LoadPricingState(cacheDir string) PricingState {
 	var s PricingState
-	data, err := os.ReadFile(filepath.Join(cacheDir, stateFileName))
+	data, err := readSmallFile(filepath.Join(cacheDir, stateFileName))
 	if err != nil || json.Unmarshal(data, &s) != nil {
 		return PricingState{}
 	}
@@ -407,7 +558,9 @@ func SavePricingState(cacheDir string, s PricingState) error {
 
 // ShouldAttempt is false within cooldown of the last attempt.
 func (s PricingState) ShouldAttempt(now time.Time, cooldown time.Duration) bool {
-	if s.LastAttempt.IsZero() {
+	// A timestamp in the future (clock was ahead, or the file is corrupt or
+	// tampered with) must not block refreshing forever.
+	if s.LastAttempt.IsZero() || s.LastAttempt.After(now.Add(5*time.Minute)) {
 		return true
 	}
 	return now.Sub(s.LastAttempt) >= cooldown
@@ -420,7 +573,7 @@ func (s PricingState) ShouldAttempt(now time.Time, cooldown time.Duration) bool 
 // LoadPricingOverrides reads pricing-overrides.json from configDir. A missing
 // file returns (nil, ""); any other problem returns (nil, reason).
 func LoadPricingOverrides(configDir string) (*PriceBook, string) {
-	data, err := os.ReadFile(filepath.Join(configDir, overridesFileName))
+	data, err := readSmallFile(filepath.Join(configDir, overridesFileName))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ""
@@ -481,10 +634,7 @@ type LayerInfo struct {
 // problems with the optional layers are reported in LayerInfo.Problems.
 func LayeredBook(cacheDir, configDir string) (*PriceBook, LayerInfo) {
 	var info LayerInfo
-	base, err := ParsePriceBook(embeddedPricing)
-	if err != nil { // cannot happen: init() already validated it
-		base = DefaultBook()
-	}
+	base := EmbeddedBook() // always the compiled-in table, never a previously layered book
 	info.EmbeddedAsOf = base.AsOf
 	out := base
 	if cacheDir != "" {
@@ -494,9 +644,12 @@ func LayeredBook(cacheDir, configDir string) (*PriceBook, LayerInfo) {
 			info.Problems = append(info.Problems, reason)
 		case c != nil:
 			info.CacheAsOf = c.AsOf
-			if c.AsOf < base.AsOf {
+			switch {
+			case c.AsOf == "" || c.AsOf > time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02"):
+				info.Problems = append(info.Problems, fmt.Sprintf("pricing cache has an invalid date (%q); ignored", clip(c.AsOf)))
+			case c.AsOf < base.AsOf:
 				info.Problems = append(info.Problems, fmt.Sprintf("pricing cache (%s) is older than the built-in table (%s); ignored", c.AsOf, base.AsOf))
-			} else {
+			default:
 				out = out.Merge(c)
 				info.CacheUsed = true
 			}
@@ -514,28 +667,12 @@ func LayeredBook(cacheDir, configDir string) (*PriceBook, LayerInfo) {
 	return out, info
 }
 
-// RefreshPricing fetches the pricing page, stores it in the cache, and returns
-// the layered book. On failure nothing but the state file is written.
+// RefreshPricing is RefreshPricingVetted without accepting suspicious changes,
+// returning just the new book. See RefreshPricingVetted for the safety rules.
 func RefreshPricing(ctx context.Context, cacheDir, configDir string, o FetchOptions, now time.Time) (*PriceBook, PricingState, error) {
-	st := LoadPricingState(cacheDir)
-	fail := func(err error) (*PriceBook, PricingState, error) {
-		st.LastAttempt = now
-		st.LastError = err.Error()
-		st.Attempts++
-		_ = SavePricingState(cacheDir, st)
-		return nil, st, err
-	}
-	fetched, err := FetchPricing(ctx, o)
+	res, err := RefreshPricingVetted(ctx, cacheDir, configDir, o, now, false)
 	if err != nil {
-		return fail(err)
+		return nil, res.State, err
 	}
-	if err := SavePricingCache(cacheDir, fetched); err != nil {
-		return fail(fmt.Errorf("pricing: saving cache: %w", err))
-	}
-	st = PricingState{LastAttempt: now, LastSuccess: now}
-	if err := SavePricingState(cacheDir, st); err != nil {
-		return nil, st, fmt.Errorf("pricing: saving state: %w", err)
-	}
-	b, _ := LayeredBook(cacheDir, configDir)
-	return b, st, nil
+	return res.Book, res.State, nil
 }

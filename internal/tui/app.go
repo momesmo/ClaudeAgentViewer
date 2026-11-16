@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -120,6 +122,12 @@ type Model struct {
 	lastSaveSize int64     // size of the cache file after the last successful save
 	lastSaveErr  string    // last save error, "" after a successful save
 
+	// Pricing refresh (opt-in; see maybeRefreshPricing)
+	pricingState  data.PricingState
+	pricingBusy   bool
+	pricingNote   string
+	pricingNoteAt time.Time
+
 	// Resume
 	ResumeSessionID  string
 	ResumeProjectDir string
@@ -170,6 +178,10 @@ func NewModel(claudeDir string, opts Options) Model {
 		sessionSubagents: make(map[sessionKey][]data.SubagentInfo),
 		flaggedSessions:  make(map[string]bool),
 		flaggedStats:     make(map[string]data.SessionStats),
+	}
+
+	if opts.PricingCacheDir != "" {
+		m.pricingState = data.LoadPricingState(opts.PricingCacheDir)
 	}
 
 	if opts.IndexCache {
@@ -437,7 +449,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Path != "" {
 			m.sessionFilePath = msg.Path
 		}
-		return m, nil
+		return m, m.maybeRefreshPricing(msg.Stats)
 
 	case TranscriptLoadedMsg:
 		m.loading = false
@@ -451,11 +463,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sessionModTime = fi.ModTime()
 			}
 		}
+		priceCmd := m.maybeRefreshPricing(msg.Stats)
 		// If viewing logs, start live tailing
 		if m.liveWatching {
-			return m, watchSessionCmd(m.sessionFilePath, m.sessionModTime)
+			return m, tea.Batch(watchSessionCmd(m.sessionFilePath, m.sessionModTime), priceCmd)
 		}
-		return m, nil
+		return m, priceCmd
 
 	case SubagentTranscriptLoadedMsg:
 		m.loading = false
@@ -558,13 +571,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dashboardLoading = false
 		d := msg.Data
 		m.dashboardData = &d
+		if d.UnpricedTokens > 0 || d.CostEstimated {
+			return m, m.startPricingRefresh()
+		}
 		return m, nil
+
+	case PricingRefreshedMsg:
+		return m.handlePricingRefreshed(msg)
 
 	case FlaggedRefreshMsg:
 		// Update cached stats for flagged sessions
+		var priceCmd tea.Cmd
 		for sid, stats := range msg.Stats {
 			m.flaggedStats[sid] = stats
+			if priceCmd == nil {
+				priceCmd = m.maybeRefreshPricing(stats)
+			}
 		}
+
 		// Update the selected session's stats if it's flagged
 		if m.selectedInfo != nil && m.flaggedSessions[m.selectedInfo.SessionID] {
 			if stats, ok := msg.Stats[m.selectedInfo.SessionID]; ok {
@@ -584,9 +608,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.buildListItems(m.searchInput.Value())
 		// Schedule next refresh if we still have flagged sessions
 		if len(m.flaggedSessions) > 0 {
-			return m, scheduleNextFlaggedRefresh()
+			return m, tea.Batch(scheduleNextFlaggedRefresh(), priceCmd)
 		}
-		return m, nil
+		return m, priceCmd
 
 	case tea.KeyMsg:
 		if m.searching {
@@ -1629,4 +1653,86 @@ func costText(usd float64, estimated, unpriced bool) string {
 		s += "+"
 	}
 	return s
+}
+
+// PricingRefreshedMsg reports the result of a background price refresh.
+type PricingRefreshedMsg struct {
+	Res data.RefreshResult
+	Err error
+}
+
+const pricingCooldown = 24 * time.Hour
+
+// needsPricing reports whether a session used a model that has no exact price
+// (priced by family estimate, or not priced at all).
+func needsPricing(s data.SessionStats) bool {
+	for _, mu := range s.ModelBreakdown {
+		if mu.Match == data.PriceFamily || mu.Match == data.PriceNone {
+			return true
+		}
+	}
+	return s.UnpricedTokens > 0
+}
+
+// maybeRefreshPricing starts a background price refresh when, and only when:
+// the user opted in (PricingAuto), there is a cache directory to store the
+// result, no refresh is running, the stats include a model without an exact
+// price, and the last attempt (success or failure) is older than the cooldown.
+func (m *Model) maybeRefreshPricing(s data.SessionStats) tea.Cmd {
+	if !needsPricing(s) {
+		return nil
+	}
+	return m.startPricingRefresh()
+}
+
+func (m *Model) startPricingRefresh() tea.Cmd {
+	if !m.opts.PricingAuto || m.opts.PricingCacheDir == "" || m.pricingBusy {
+		return nil
+	}
+	now := time.Now()
+	if !m.pricingState.ShouldAttempt(now, pricingCooldown) {
+		return nil
+	}
+	m.pricingBusy = true
+	o, cacheDir, configDir := m.opts.PricingFetch, m.opts.PricingCacheDir, m.opts.PricingConfigDir
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		res, err := data.RefreshPricingVetted(ctx, cacheDir, configDir, o, now, false)
+		return PricingRefreshedMsg{Res: res, Err: err}
+	}
+}
+
+func (m *Model) setPricingNote(s string) {
+	m.pricingNote, m.pricingNoteAt = s, time.Now()
+}
+
+func (m Model) handlePricingRefreshed(msg PricingRefreshedMsg) (tea.Model, tea.Cmd) {
+	m.pricingBusy = false
+	m.pricingState = msg.Res.State
+	switch {
+	case errors.Is(msg.Err, data.ErrSuspiciousPrices):
+		m.setPricingNote("price changes need review: run claudevu --update-pricing")
+		return m, nil
+	case msg.Err != nil:
+		m.setPricingNote("price update failed")
+		m.setStatus("Price update failed: " + truncateRunes(msg.Err.Error(), 80))
+		return m, nil
+	}
+	data.SetDefaultBook(msg.Res.Book)
+	m.setPricingNote(fmt.Sprintf("prices updated (%d changed)", len(msg.Res.Changes)))
+	// Costs already on screen were computed with the old table: recompute them.
+	m.dashboardData = nil
+	var cmds []tea.Cmd
+	if m.selectedInfo != nil {
+		cmds = append(cmds, loadQuickStatsCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID))
+	}
+	if len(m.flaggedSessions) > 0 {
+		cmds = append(cmds, refreshFlaggedCmd(m.claudeDir, m.flaggedSessions, m.groups))
+	}
+	if m.currentView == viewDashboard {
+		m.dashboardLoading = true
+		cmds = append(cmds, loadDashboardCmd(m.claudeDir, m.groups))
+	}
+	return m, tea.Batch(cmds...)
 }

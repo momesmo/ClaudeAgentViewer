@@ -1,7 +1,6 @@
 package data
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"strings"
@@ -34,8 +33,7 @@ func ScanSessionMeta(path string) (agentName, customTitle string) {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 64*1024)
+	scanner := newLineScanner(f, maxLineBytes)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if agentName != "" && customTitle != "" {
@@ -70,8 +68,7 @@ func QuickScanStats(path string) (SessionStats, error) {
 	stats := SessionStats{ToolsUsed: make(map[string]int)}
 	tally := NewUsageTally(DefaultBook())
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+	scanner := newLineScanner(f, maxStatsLineBytes)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()

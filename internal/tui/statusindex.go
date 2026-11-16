@@ -8,6 +8,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/user/claudevu/internal/data"
 )
 
 // statusSeg is one segment of the index status bar. plains lists the text
@@ -150,7 +152,38 @@ func (m Model) indexSegments(avail int) []statusSeg {
 			style:  helpKeyStyle,
 		})
 	}
+
+	// 5. Which prices costs are computed from (and a refresh in progress).
+	segs = append(segs, m.pricingSegment())
 	return segs
+}
+
+// pricingSegment describes the price table in use: its date, where it came from,
+// any problems loading optional layers, and refresh activity.
+func (m Model) pricingSegment() statusSeg {
+	asOf := data.DefaultBook().AsOf
+	info := m.opts.PricingInfo
+	if m.pricingBusy {
+		return statusSeg{plains: []string{"Prices: updating…", "Prices…"}, style: toolLabelStyle}
+	}
+	if m.pricingNote != "" && time.Since(m.pricingNoteAt) < 30*time.Second {
+		return statusSeg{plains: []string{"Prices: " + m.pricingNote, m.pricingNote}, style: toolLabelStyle}
+	}
+	full := "Prices: " + asOf
+	if info.CacheUsed {
+		full += " (fetched)"
+	}
+	if info.OverrideModels > 0 {
+		full += fmt.Sprintf(" +%s", plural(info.OverrideModels, "override"))
+	}
+	style := mutedStyle
+	plains := []string{full, "Prices: " + asOf}
+	if n := len(info.Problems); n > 0 {
+		full += " ⚠ " + plural(n, "problem")
+		plains = []string{full, "Prices ⚠"}
+		style = toolLabelStyle
+	}
+	return statusSeg{plains: plains, style: style}
 }
 
 // indexCounts returns how many known sessions have an index entry, how many

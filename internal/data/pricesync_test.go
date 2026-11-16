@@ -54,7 +54,7 @@ func TestParsePricingMarkdown_Padding(t *testing.T) {
 	md := "intro\n|Model|Base input tokens|5m cache writes|1h cache writes|Cache hits|Output|\n|---|---|---|---|---|---|\n" +
 		"|   Claude   Opus 5.5 ([x](http://a/b_(c)))   |$4/MTok<sup>1</sup>|  $5 / MTok|$8 / MTok|$0.20 / MTok |$20 / MTok|\n" +
 		"| Claude Instant 1 | $1 / MTok | $1 / MTok | $1 / MTok | $1 / MTok | $1 / MTok |\n\nafter\n"
-	b, err := ParsePricingMarkdown([]byte(md), "s", "d")
+	b, err := ParsePricingMarkdown([]byte(md), "s", "2026-01-01")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestParsePricingMarkdown_Padding(t *testing.T) {
 }
 
 func TestParsePricingMarkdown_Errors(t *testing.T) {
-	hdr := "| Model | Base input tokens | 5m | 1h | hit | Out |\n| - | - | - | - | - | - |\n"
+	hdr := "| Model | Base input tokens | 5m cache writes | 1h cache writes | Cache hits and refreshes | Output tokens |\n| - | - | - | - | - | - |\n"
 	row := "| Claude Opus 5.5 | $4 / MTok | $5 / MTok | $8 / MTok | $0.2 / MTok | $20 / MTok |\n"
 	cases := map[string]string{
 		"bad price":      hdr + strings.Replace(row, "$5 / MTok", "five dollars", 1),
@@ -77,11 +77,11 @@ func TestParsePricingMarkdown_Errors(t *testing.T) {
 		"invalid rates":  hdr + strings.Replace(row, "$8 / MTok", "$1 / MTok", 1),
 	}
 	for name, md := range cases {
-		if b, err := ParsePricingMarkdown([]byte(md), "s", "d"); err == nil {
+		if b, err := ParsePricingMarkdown([]byte(md), "s", "2026-01-01"); err == nil {
 			t.Errorf("%s: expected error, got %+v", name, b)
 		}
 	}
-	_, err := ParsePricingMarkdown([]byte(hdr+strings.Replace(row, "$5 / MTok", "five", 1)), "s", "d")
+	_, err := ParsePricingMarkdown([]byte(hdr+strings.Replace(row, "$5 / MTok", "five", 1)), "s", "2026-01-01")
 	if err == nil || !strings.Contains(err.Error(), "Opus 5.5") {
 		t.Errorf("error should name the row: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestParsePricingMarkdown_TruncationNeverPanics(t *testing.T) {
 		if i%3 == 0 { // also chop the front / splice garbage
 			cut = append(append([]byte{}, fx[rng.Intn(n+1):n]...), byte(rng.Intn(256)))
 		}
-		_, _ = ParsePricingMarkdown(cut, "s", "d")
+		_, _ = ParsePricingMarkdown(cut, "s", "2026-01-01")
 	}
 }
 
@@ -107,7 +107,7 @@ func tlsServer(t *testing.T, h http.HandlerFunc) (*httptest.Server, FetchOptions
 	srv := httptest.NewTLSServer(h)
 	t.Cleanup(srv.Close)
 	u, _ := url.Parse(srv.URL)
-	return srv, FetchOptions{URL: srv.URL + "/p.md", Client: srv.Client(), AllowHosts: []string{u.Hostname()}}
+	return srv, FetchOptions{URL: srv.URL + "/p.md", Client: srv.Client(), AllowHosts: []string{u.Host}}
 }
 
 func serveMD(t *testing.T) http.HandlerFunc {
@@ -362,7 +362,7 @@ func TestLayeredBook(t *testing.T) {
 
 	// Newer cache wins over embedded.
 	c := *emb
-	c.AsOf = "2999-01-01"
+	c.AsOf = time.Now().UTC().Format("2006-01-02")
 	c.Models = map[string]ModelPrice{}
 	for k, v := range emb.Models {
 		c.Models[k] = v
@@ -374,7 +374,7 @@ func TestLayeredBook(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, info = LayeredBook(cache, cfg)
-	if !info.CacheUsed || b.Models["claude-opus-5"].Input != 6 || info.CacheAsOf != "2999-01-01" {
+	if !info.CacheUsed || b.Models["claude-opus-5"].Input != 6 || info.CacheAsOf != c.AsOf {
 		t.Fatalf("cache: %+v", info)
 	}
 	// Override wins over cache.

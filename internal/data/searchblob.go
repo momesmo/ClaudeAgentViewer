@@ -256,13 +256,18 @@ func joinGroups(groups []lineGroup) string {
 // if more was discarded). n is the exact number of bytes consumed, including
 // the line terminator, so callers can track the file offset.
 func readLineN(r *bufio.Reader) (line []byte, truncated bool, n int64, err error) {
+	return readLineLimit(r, maxLineBytes)
+}
+
+// readLineLimit is readLineN with a caller-chosen limit.
+func readLineLimit(r *bufio.Reader, limit int) (line []byte, truncated bool, n int64, err error) {
 	for {
 		chunk, e := r.ReadSlice('\n')
 		n += int64(len(chunk))
 		if !truncated {
 			take := chunk
-			if len(line)+len(take) > maxLineBytes {
-				take = take[:maxLineBytes-len(line)]
+			if len(line)+len(take) > limit {
+				take = take[:limit-len(line)]
 				truncated = true
 			}
 			line = append(line, take...)

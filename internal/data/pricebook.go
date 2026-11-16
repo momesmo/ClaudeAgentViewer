@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // embeddedPricing is the price table shipped with the binary. It is generated
@@ -73,15 +74,24 @@ func (k PriceMatch) String() string {
 	return [...]string{"none", "exact", "normalized", "family"}[k]
 }
 
-var defaultBook atomic.Pointer[PriceBook]
+var (
+	defaultBook  atomic.Pointer[PriceBook]
+	embeddedBook *PriceBook // the table compiled into the binary; never replaced at runtime
+)
 
 func init() {
 	b, err := ParsePriceBook(embeddedPricing)
 	if err != nil {
 		panic("claudevu: embedded pricing_table.json is invalid: " + err.Error())
 	}
+	embeddedBook = b
 	defaultBook.Store(b)
 }
+
+// EmbeddedBook returns the built-in table. It is the fixed baseline that
+// fetched prices are checked against; unlike DefaultBook it never contains
+// fetched prices or user overrides. Callers must not modify it.
+func EmbeddedBook() *PriceBook { return embeddedBook }
 
 // DefaultBook returns the price book used for all cost calculations.
 func DefaultBook() *PriceBook { return defaultBook.Load() }
@@ -105,6 +115,9 @@ func ParsePriceBook(data []byte) (*PriceBook, error) {
 	if err := dec.Decode(&b); err != nil {
 		return nil, fmt.Errorf("pricing: %w", err)
 	}
+	if dec.More() {
+		return nil, fmt.Errorf("pricing: unexpected data after the JSON document")
+	}
 	if err := b.Validate(); err != nil {
 		return nil, err
 	}
@@ -116,6 +129,11 @@ func ParsePriceBook(data []byte) (*PriceBook, error) {
 func (b *PriceBook) Validate() error {
 	if b.Version != 1 {
 		return fmt.Errorf("pricing: unsupported version %d", b.Version)
+	}
+	if b.AsOf != "" {
+		if _, err := time.Parse("2006-01-02", b.AsOf); err != nil {
+			return fmt.Errorf("pricing: asOf %q is not a YYYY-MM-DD date", b.AsOf)
+		}
 	}
 	if len(b.Models) == 0 {
 		return fmt.Errorf("pricing: no models")
@@ -163,15 +181,20 @@ func validateRate(what string, r Rate) error {
 // Merge returns a new book with over's models and non-zero modifiers layered on
 // top of b. Neither input is modified.
 func (b *PriceBook) Merge(over *PriceBook) *PriceBook {
+	if over == nil {
+		over = &PriceBook{}
+	}
 	out := &PriceBook{Version: b.Version, Source: b.Source, AsOf: b.AsOf, Modifiers: b.Modifiers,
 		Models: make(map[string]ModelPrice, len(b.Models)+len(over.Models))}
 	for k, v := range b.Models {
 		out.Models[k] = v
 	}
-	if over == nil {
-		return out
-	}
 	for k, v := range over.Models {
+		// An override that leaves out the long-context tier keeps the base tier;
+		// dropping it would silently under-price long prompts.
+		if base, ok := b.Models[k]; ok && v.LongContext == nil && base.LongContext != nil {
+			v.LongContext = base.LongContext
+		}
 		out.Models[k] = v
 	}
 	if over.Modifiers.FastMultiplier != 0 {

@@ -1,7 +1,6 @@
 package data
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -105,8 +104,7 @@ func LoadTranscript(path string) ([]SessionMessage, error) {
 	defer f.Close()
 
 	var messages []SessionMessage
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
+	scanner := newLineScanner(f, maxStatsLineBytes)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
