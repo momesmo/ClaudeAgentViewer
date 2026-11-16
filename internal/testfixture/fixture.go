@@ -50,6 +50,7 @@ type SessionExp struct {
 	SearchWord  string // appears only inside the transcript, never in Display
 
 	Lines        int // transcript lines of type user/assistant == MessageCount
+	BigLines     int // user lines of BigLineBytes (skipped when the stats line limit is below that)
 	APIMessages  int // distinct assistant messages
 	ToolUses     int // tool_use blocks
 	Input        int
@@ -101,7 +102,10 @@ func (f *Fixture) Session(t testing.TB, key string) *SessionExp {
 	return nil
 }
 
-type tok struct{ in, out, cr, cw5, cw1 int }
+type tok struct {
+	in, out, cr, cw5, cw1 int
+	speed, geo            string // "" means standard / global
+}
 
 type builder struct {
 	t       testing.TB
@@ -147,6 +151,32 @@ func (b *builder) toolResult(toolID, content string) {
 			map[string]any{"type": "tool_result", "tool_use_id": toolID, "content": content}}}})
 }
 
+// synthetic writes a locally generated assistant line: model <synthetic>, no
+// usage. It counts as a message line but never as usage or cost.
+func (b *builder) synthetic(txt string) {
+	b.exp.Lines++
+	b.emit(map[string]any{"type": "assistant", "timestamp": b.stamp(), "uuid": b.uuid(),
+		"message": map[string]any{"id": "", "role": "assistant", "model": "<synthetic>", "content": []any{text(txt)},
+			"usage": map[string]any{"input_tokens": 0, "output_tokens": 0}}})
+}
+
+// garbage writes a truncated JSON line (it mentions output_tokens so the quick
+// scan cannot skip it by pre-check). Every reader must skip it silently.
+func (b *builder) garbage() {
+	b.lines = append(b.lines, `{"type":"assistant","message":{"id":"msg_cut","model":"claude-sonnet-5-5","usage":{"input_tokens":99999,"output_tokens":9`)
+}
+
+// toolResultStructured is a user line whose tool_result text quotes tool_use
+// and which carries an unescaped structured toolUseResult containing the bare
+// string "tool_use" (neither is a tool call).
+func (b *builder) toolResultStructured(toolID, content string) {
+	b.exp.Lines++
+	b.emit(map[string]any{"type": "user", "timestamp": b.stamp(), "uuid": b.uuid(),
+		"toolUseResult": map[string]any{"kind": "tool_use", "note": "tool_use"},
+		"message": map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "tool_result", "tool_use_id": toolID, "content": content}}}})
+}
+
 func (b *builder) uuid() string { b.n++; return fmt.Sprintf("uuid-%s-%d", b.exp.Key, b.n) }
 
 // assistant writes ONE LINE PER BLOCK, each repeating the same message.id and
@@ -159,7 +189,7 @@ func (b *builder) assistant(model string, u tok, stop string, blocks ...map[stri
 		"cache_read_input_tokens":     u.cr,
 		"cache_creation_input_tokens": u.cw5 + u.cw1,
 		"cache_creation":              map[string]any{"ephemeral_5m_input_tokens": u.cw5, "ephemeral_1h_input_tokens": u.cw1},
-		"service_tier":                "standard", "speed": "standard", "inference_geo": "global",
+		"service_tier":                "standard", "speed": orDefault(u.speed, "standard"), "inference_geo": orDefault(u.geo, "global"),
 	}
 	for i, blk := range blocks {
 		b.exp.Lines++
@@ -168,7 +198,9 @@ func (b *builder) assistant(model string, u tok, stop string, blocks ...map[stri
 		}
 		msg := map[string]any{"id": id, "role": "assistant", "model": model, "type": "message",
 			"content": []any{blk}, "usage": usage}
-		if i == len(blocks)-1 && stop != "" {
+		if i == len(blocks)-1 && stop == "" && blk["type"] == "tool_use" {
+			msg["stop_reason"] = "tool_use" // as in real transcripts; a bare "tool_use" string appears on the line
+		} else if i == len(blocks)-1 && stop != "" {
 			msg["stop_reason"] = stop
 		} else {
 			msg["stop_reason"] = nil
@@ -182,22 +214,18 @@ func (b *builder) assistant(model string, u tok, stop string, blocks ...map[stri
 	e.Output += u.out
 	e.CacheRead += u.cr
 	e.CacheWrite += u.cw5 + u.cw1
-	c := b.book.Cost(data.Usage{Model: model, Input: u.in, Output: u.out, CacheRead: u.cr,
-		CacheWrite5m: u.cw5, CacheWrite1h: u.cw1, Speed: "standard", Geo: "global"})
-	e.CostUSD += c.USD
+	usd, priced := price(b.book, model, u)
+	e.CostUSD += usd
 	pm, ok := e.PerModel[model]
 	if !ok {
 		e.Models = append(e.Models, model)
 	}
 	pm.Messages++
 	pm.Tokens += u.in + u.out
-	pm.CostUSD += c.USD
-	switch c.Match {
-	case data.PriceNone:
+	pm.CostUSD += usd
+	if !priced {
 		pm.Unpriced, e.Unpriced = true, true
 		e.UnpricedToks += u.in + u.out + u.cr + u.cw5 + u.cw1
-	case data.PriceFamily:
-		pm.Estimated, e.Estimated = true, true
 	}
 	e.PerModel[model] = pm
 }
@@ -265,14 +293,16 @@ func BuildClaudeDir(t testing.TB) *Fixture {
 	// ---- project alpha ----
 	rec, b := newSession("recent", "/work/alpha", "implement the recent feature", 2*time.Minute, true)
 	b.user("implement the recent feature")
-	b.assistant("claude-sonnet-5-5", tok{1200, 300, 5000, 800, 0}, "",
+	b.assistant("claude-sonnet-5-5", tok{1200, 300, 5000, 800, 0, "", ""}, "",
 		thinking("plan it"), text("Let me look around."), tool("toolu_a1", "Read", map[string]any{"file_path": "/work/alpha/main.go"}))
 	b.toolResult("toolu_a1", "package main")
-	b.assistant("claude-sonnet-5-5", tok{1500, 450, 7000, 0, 1200}, "",
+	b.assistant("claude-sonnet-5-5", tok{1500, 450, 7000, 0, 1200, "", ""}, "",
 		tool("toolu_a2", "Agent", map[string]any{"description": "explore the repo", "subagent_type": "Explore", "prompt": "look"}),
 		tool("toolu_a3", "Agent", map[string]any{"description": "plan the work", "subagent_type": "Plan", "prompt": "plan"}))
 	b.toolResult("toolu_a2", "done exploring")
-	b.assistant("claude-sonnet-5-5", tok{900, 200, 9000, 0, 0}, "end_turn", text("All done."))
+	b.synthetic("No response requested.") // locally generated: ignored by usage
+	b.garbage()                           // truncated JSON: skipped silently
+	b.assistant("claude-sonnet-5-5", tok{900, 200, 9000, 0, 0, "", ""}, "end_turn", text("All done."))
 	finish(b)
 	// a duplicate, older history entry for the same session must be ignored
 	hist = append(hist, mustJSON(t, map[string]any{"display": "stale older prompt", "timestamp": rec.Time.Add(-time.Hour).UnixMilli(),
@@ -284,41 +314,50 @@ func BuildClaudeDir(t testing.TB) *Fixture {
 	b.meta("agent-name", "agentName", titled.AgentName)
 	b.meta("custom-title", "customTitle", titled.CustomTitle)
 	b.user("fix the parser")
-	b.assistant("claude-opus-5-5", tok{2000, 600, 10000, 1500, 0}, "",
+	b.assistant("claude-opus-5-5", tok{2000, 600, 10000, 1500, 0, "", ""}, "",
 		thinking("hmm"), text("Parser fixed."), tool("toolu_t1", "Edit", map[string]any{"file_path": "p.go"}))
 	b.toolResult("toolu_t1", "ok")
-	b.assistant("claude-opus-5-5", tok{2100, 400, 12000, 0, 0}, "end_turn", text("Verified."))
+	b.assistant("claude-opus-5-5", tok{2100, 400, 12000, 0, 0, "", ""}, "end_turn", text("Verified."))
 	finish(b)
 
 	// ---- project beta ----
 	mixed, b := newSession("mixed", "/work/beta", "compare two models", 30*24*time.Hour, true)
 	mixed.SearchWord = "zebracrossing"
 	b.user("compare two models")
-	b.assistant("claude-sonnet-5-5", tok{800, 250, 3000, 500, 0}, "", text("First with sonnet."), tool("toolu_m1", "Bash", map[string]any{"command": "ls"}))
-	b.toolResult("toolu_m1", "a b c")
-	b.assistant("claude-opus-4-8", tok{1000, 700, 4000, 0, 600}, "", thinking("deeper"), text("Now opus notes the "+mixed.SearchWord+" detail."))
+	b.assistant("claude-sonnet-5-5", tok{800, 250, 3000, 500, 0, "", ""}, "", text(`First with sonnet. A block looks like {"type":"tool_use"} in JSON.`), tool("toolu_m1", "Bash", map[string]any{"command": "ls"}))
+	b.toolResultStructured("toolu_m1", `output mentions "type":"tool_use" and tool_use blocks`)
+	b.assistant("claude-opus-4-8", tok{1000, 700, 4000, 0, 600, "", ""}, "", thinking("deeper"), text("Now opus notes the "+mixed.SearchWord+" detail."))
 	b.user("thanks")
-	b.assistant("claude-sonnet-5-5", tok{700, 150, 6000, 0, 0}, "end_turn", text("Welcome."))
+	b.assistant("claude-sonnet-5-5", tok{700, 150, 6000, 0, 0, "", ""}, "end_turn", text("Welcome."))
 	finish(b)
 
-	_, b = newSession("bigline", "/work/beta", "read the huge file", 60*24*time.Hour, true)
+	big, b := newSession("bigline", "/work/beta", "read the huge file", 60*24*time.Hour, true)
 	b.user("read the huge file")
-	b.assistant("claude-opus-4-8", tok{500, 100, 0, 2000, 0}, "", tool("toolu_b1", "Read", map[string]any{"file_path": "huge.bin"}))
+	b.assistant("claude-opus-4-8", tok{500, 100, 0, 2000, 0, "", ""}, "", tool("toolu_b1", "Read", map[string]any{"file_path": "huge.bin"}))
 	b.toolResult("toolu_b1", strings.Repeat("x", BigLineBytes)) // > 300 KB single line
-	b.assistant("claude-opus-4-8", tok{600, 900, 2000, 0, 0}, "", text("It is large."))
-	b.assistant("claude-opus-4-8", tok{650, 300, 3000, 0, 0}, "end_turn", text("Summary done."))
+	big.BigLines = 1
+	b.assistant("claude-opus-4-8", tok{600, 900, 2000, 0, 0, "", ""}, "", text("It is large."))
+	b.assistant("claude-opus-4-8", tok{650, 300, 3000, 0, 0, "", ""}, "end_turn", text("Summary done."))
+	finish(b)
+
+	sg, b := newSession("speedgeo", "/work/beta", "fast and us-geo requests", 10*24*time.Hour, true)
+	_ = sg
+	b.user("fast and us-geo requests")
+	b.assistant("claude-opus-5-5", tok{1000, 200, 0, 0, 0, "fast", ""}, "", text("fast"))
+	b.assistant("claude-opus-5-5", tok{1000, 200, 0, 0, 0, "", "us"}, "", text("us geo"))
+	b.assistant("claude-opus-4-8", tok{2000, 400, 10000, 1000, 500, "fast", "us"}, "end_turn", text("both"))
 	finish(b)
 
 	// ---- project gamma ----
 	_, b = newSession("mystery", "/work/gamma", "try the new model", 45*24*time.Hour, true)
 	b.user("try the new model")
-	b.assistant("mystery-model-1", tok{400, 120, 1000, 0, 0}, "", text("Hello from nowhere."))
-	b.assistant("mystery-model-1", tok{450, 80, 1500, 0, 0}, "end_turn", text("Bye."))
+	b.assistant("mystery-model-1", tok{400, 120, 1000, 0, 0, "", ""}, "", text("Hello from nowhere."))
+	b.assistant("mystery-model-1", tok{450, 80, 1500, 0, 0, "", ""}, "end_turn", text("Bye."))
 	finish(b)
 
 	_, b = newSession("tiny", "/work/gamma", "say hi to tiny", 200*24*time.Hour, true)
 	b.user("say hi to tiny")
-	b.assistant("claude-sonnet-5-5", tok{10, 5, 0, 0, 0}, "end_turn", text("Hello!"))
+	b.assistant("claude-sonnet-5-5", tok{10, 5, 0, 0, 0, "", ""}, "end_turn", text("Hello!"))
 	finish(b)
 
 	newSession("notranscript", "/work/gamma", "history entry without a transcript", 20*24*time.Hour, false)
@@ -373,11 +412,11 @@ func (f *Fixture) subagents(t testing.TB, s *SessionExp, now time.Time) {
 		b := newBuilder(t, sub, now.Add(-time.Hour))
 		b.user("do the subtask")
 		if running { // last line has no end_turn and the file is fresh: still running
-			b.assistant("claude-sonnet-5-5", tok{300, 80, 1000, 0, 0}, "", tool("toolu_s1", "Grep", map[string]any{"pattern": "x"}))
+			b.assistant("claude-sonnet-5-5", tok{300, 80, 1000, 0, 0, "", ""}, "", tool("toolu_s1", "Grep", map[string]any{"pattern": "x"}))
 		} else {
-			b.assistant("claude-sonnet-5-5", tok{300, 80, 1000, 0, 0}, "", tool("toolu_s1", "Grep", map[string]any{"pattern": "x"}))
+			b.assistant("claude-sonnet-5-5", tok{300, 80, 1000, 0, 0, "", ""}, "", tool("toolu_s1", "Grep", map[string]any{"pattern": "x"}))
 			b.toolResult("toolu_s1", "match")
-			b.assistant("claude-sonnet-5-5", tok{350, 120, 1500, 0, 0}, "end_turn", text("Found it."))
+			b.assistant("claude-sonnet-5-5", tok{350, 120, 1500, 0, 0, "", ""}, "end_turn", text("Found it."))
 		}
 		mtime := now // fresh mtime for the running one
 		if !running {
@@ -391,3 +430,62 @@ func (f *Fixture) subagents(t testing.TB, s *SessionExp, now time.Time) {
 	mk("agent-run0001", "Explore", true)
 	mk("agent-done0001", "Plan", false)
 }
+
+func orDefault(v, d string) string {
+	if v == "" {
+		return d
+	}
+	return v
+}
+
+// usEligible lists the fixture models that support the US data-residency
+// multiplier (Claude 4.6 and later).
+var usEligible = map[string]bool{"claude-sonnet-5-5": true, "claude-opus-5-5": true, "claude-opus-4-8": true}
+
+// price is an independent implementation of the pricing formula. It reads only
+// the RATES (data) from the embedded table; the arithmetic, the long-context
+// tier, and the fast and US multipliers are written out here. Models that are
+// not in the table (exact id) are unpriced: cost unknown, reported as 0.
+func price(book *data.PriceBook, model string, u tok) (usd float64, priced bool) {
+	mp, ok := book.Models[model]
+	if !ok {
+		return 0, false
+	}
+	r := mp.Rate
+	if lc := mp.LongContext; lc != nil && u.in+u.cr+u.cw5+u.cw1 > lc.OverTokens {
+		r = lc.Rate
+	}
+	usd = float64(u.in)*r.Input + float64(u.out)*r.Output + float64(u.cr)*r.CacheRead +
+		float64(u.cw5)*r.CacheWrite5m + float64(u.cw1)*r.CacheWrite1h
+	usd /= 1e6
+	if u.speed == "fast" {
+		usd *= book.Modifiers.FastMultiplier
+	}
+	if u.geo == "us" && usEligible[model] {
+		usd *= book.Modifiers.USGeoMultiplier
+	}
+	return usd, true
+}
+
+// Hand-derived USD literals (rates per million tokens from the embedded table:
+// sonnet-5-5 in 2, out 10, cacheRead 0.1, 5m write 2.5, 1h write 4;
+// opus-5-5 in 4, out 20; opus-4-8 in 5, out 25, cacheRead 0.5, 5m 6.25, 1h 10;
+// fast x2, US geo x1.1).
+const (
+	// tiny: 10 in + 5 out on sonnet-5-5 = (10*2 + 5*10)/1e6 = 70/1e6.
+	LiteralTinyUSD = 0.00007
+
+	// recent (sonnet-5-5, with both a 5m and a 1h cache write), per message in micro-USD:
+	//   m1 1200in 300out 5000cr 800w5m : 2400+3000+500+2000  = 7900
+	//   m2 1500in 450out 7000cr 1200w1h: 3000+4500+700+4800  = 13000
+	//   m3  900in 200out 9000cr        : 1800+2000+900       = 4700
+	// total 25600/1e6.
+	LiteralRecentUSD = 0.0256
+
+	// speedgeo, per message:
+	//   A opus-5-5 fast:           (1000*4+200*20)=8000 *2        = 16000
+	//   B opus-5-5 us geo:         8000 *1.1                      = 8800
+	//   C opus-4-8 fast and us:    (2000*5+400*25+10000*0.5+1000*6.25+500*10)=36250 *2 *1.1 = 79750
+	// total 104550/1e6.
+	LiteralSpeedGeoUSD = 0.10455
+)
