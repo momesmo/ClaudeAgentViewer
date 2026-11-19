@@ -106,6 +106,14 @@ not a required check. Actions are pinned to full commit SHAs with a version
 comment; Dependabot updates them. `go.mod` pins `toolchain go1.27.4` (older patch
 releases had reachable `net/http`/`crypto/tls` vulnerabilities).
 
+Branch ruleset and Actions settings (live on GitHub, not in the repo): the `main: require PR`
+ruleset (id 27652687, no bypass actors) requires a PR, blocks force-push and deletion, and
+requires these checks by exact job name: `test (ubuntu-latest)`, `test (windows-latest)`,
+`min go version`, `vulncheck`, `lint`, and `cross-build (<os>/<arch>)` for linux, darwin and
+windows on amd64 and arm64. Renaming a job or changing a matrix means updating the ruleset
+too, or PRs stall on a check that never reports. The fork also sets `sha_pinning_required`,
+so every `uses:` must be a full commit SHA. Dependabot alerts and security updates are on.
+
 First real run (2026-11-16, run 43946192515): everything passed except
 `test (macos-latest)`, which never got a runner (GitHub's macOS arm64 capacity); it hit
 the same problem on 2026-11-19, so it moved to its own non-required workflow. See R-43
