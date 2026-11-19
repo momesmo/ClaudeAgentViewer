@@ -120,5 +120,24 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # govulncheck is a `tool` in go.mod, so Dependabot's gomod updates keep it current.
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        run: go tool govulncheck ./...
+
+  # go.mod/go.sum must be tidy, and staticcheck (also a `tool` in go.mod) must be clean.
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go.mod and go.sum are tidy
+        run: go mod tidy -diff
+      - name: staticcheck
+        run: go tool staticcheck ./...

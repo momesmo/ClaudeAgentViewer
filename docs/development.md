@@ -95,17 +95,22 @@ gh run rerun <id> -R momesmo/ClaudeAgentViewer --failed
 
 ## CI (`.github/workflows/ci.yml`)
 
-Jobs: `test` (ubuntu, macos, windows: vet, build, `go test -race`, gofmt on ubuntu),
+Triggers: pull requests into `main` and manual dispatch only. Jobs: `test` (ubuntu, windows: vet, build, `go test -race`, gofmt on ubuntu),
 `cross-build` (linux/darwin/windows x amd64/arm64, `CGO_ENABLED=0`), `min-go`
 (builds with the `go` line from `go.mod`, `GOTOOLCHAIN=local`), `vulncheck`
-(blocking `govulncheck`). Actions are pinned to full commit SHAs with a version
+(blocking `govulncheck`), `lint` (`go mod tidy -diff` and `staticcheck`; U1000 unused-code
+checks are off in `staticcheck.conf` until the seven known unused symbols are dealt with).
+`govulncheck` and `staticcheck` are `tool` entries in `go.mod`, so Dependabot's gomod
+updates keep them current. macOS tests run in `.github/workflows/macos.yml`, which is
+not a required check. Actions are pinned to full commit SHAs with a version
 comment; Dependabot updates them. `go.mod` pins `toolchain go1.27.4` (older patch
 releases had reachable `net/http`/`crypto/tls` vulnerabilities).
 
 First real run (2026-11-16, run 43946192515): everything passed except
-`test (macos-latest)`, which never got a runner (GitHub's macOS arm64 capacity). A
-re-run was queued. See R-43 in `docs/improvements.md`. Known wrinkle: push plus
-pull_request runs twice on a PR branch (R-42).
+`test (macos-latest)`, which never got a runner (GitHub's macOS arm64 capacity); it hit
+the same problem on 2026-11-19, so it moved to its own non-required workflow. See R-43
+in `docs/improvements.md`. The push plus pull_request double run (R-42) is gone: CI now
+triggers only on pull requests into `main`.
 
 ## How work was done (keep doing it this way)
 

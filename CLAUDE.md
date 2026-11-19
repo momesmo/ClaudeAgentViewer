@@ -24,7 +24,7 @@ go test -race ./...
 go test ./internal/data -run xxx -bench BenchmarkIndex
 ```
 
-**CI and toolchain.** `.github/workflows/ci.yml` runs vet, build, `go test -race` and a gofmt check on Linux, macOS and Windows, cross-builds six OS/arch targets, tests the minimum Go version in `go.mod`, and runs a blocking `govulncheck`. `go.mod` pins `toolchain go1.27.4`; Go downloads it automatically, which keeps local builds, CI and releases on a patched standard library (older patch releases had reachable `net/http`/`crypto/tls` vulnerabilities that the price fetcher would hit). Actions are pinned to full commit SHAs; Dependabot keeps them current. Run `gofmt -l $(git ls-files '*.go')` before committing: CI fails on unformatted files.
+**CI and toolchain.** `.github/workflows/ci.yml` runs vet, build, `go test -race` and a gofmt check on Linux and Windows, cross-builds six OS/arch targets, tests the minimum Go version in `go.mod`, checks that `go.mod` is tidy and runs `staticcheck`, and runs a blocking `govulncheck`. It triggers only on pull requests into `main` (plus manual dispatch). macOS tests live in `.github/workflows/macos.yml`, a separate non-required workflow, because hosted macOS arm64 runners are often capacity-starved. `govulncheck` and `staticcheck` are `tool` entries in `go.mod`, so Dependabot keeps them current. `go.mod` pins `toolchain go1.27.4`; Go downloads it automatically, which keeps local builds, CI and releases on a patched standard library (older patch releases had reachable `net/http`/`crypto/tls` vulnerabilities that the price fetcher would hit). Actions are pinned to full commit SHAs; Dependabot keeps them current. Run `gofmt -l $(git ls-files '*.go')` before committing: CI fails on unformatted files.
 
 **Tests never touch your real `~/.claude`.** Every package's `TestMain` calls `internal/testenv`, which points HOME, USERPROFILE, XDG_*, AppData and LocalAppData at an empty temp dir. Tests use `internal/testfixture` (`BuildClaudeDir`): a fake claude dir with the real on-disk shape (one JSONL line per content block with repeated message IDs and usage, subagents, an oversized line, unknown models, fast and US-geo messages) whose expected values are derived by hand, including literal USD amounts. A test must never skip because data is missing. To profile your own data: `CLAUDEVU_TEST_REAL_CLAUDE=1 go test -run PerfProfile .`
 
@@ -37,7 +37,7 @@ Full detail and reasons: `docs/development.md`. The essentials:
 - **Never bypass the ggshield pre-commit hook.** If a test string looks like a secret, split the literal (`"xo" + "xb-..."`). Never commit real session data or tokens.
 - **Backlog and decisions live in `docs/improvements.md`** (stable IDs, decision log). Update it, and the relevant docs, in the same change as the code.
 - **How work is done:** implement in a git worktree (`.claude/worktrees/`, git-ignored), get an independent review, verify claims yourself, and prove tests catch bugs by mutating the code (a mutation no test catches is a missing test).
-- **Before committing:** `go vet ./... && go test -race -count=1 ./...` and `gofmt -l $(git ls-files '*.go')` (empty). CI enforces both.
+- **Before committing:** `go vet ./... && go test -race -count=1 ./...` and `gofmt -l $(git ls-files '*.go')` (empty), `go mod tidy -diff` and `go tool staticcheck ./...`. CI enforces all of them (macOS tests run locally, since the CI job is non-required).
 
 ## Architecture
 

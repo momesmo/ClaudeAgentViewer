@@ -119,7 +119,7 @@ gofmt -l $(git ls-files '*.go')                  # must print nothing (CI checks
 go run . --version                               # the only other flag not covered above
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same checks on Linux, macOS and Windows, cross-builds six targets, tests the minimum Go version and runs `govulncheck`. `go.mod` pins a patched Go toolchain, which Go downloads automatically. For architecture notes, working agreements and the backlog, see `CLAUDE.md`, `docs/development.md` and `docs/improvements.md`.
+CI (`.github/workflows/ci.yml`) runs the same checks on Linux and Windows, cross-builds six targets, tests the minimum Go version, runs `staticcheck` and `govulncheck`, and checks that `go.mod` is tidy. macOS tests run in a separate workflow (`macos.yml`). `go.mod` pins a patched Go toolchain, which Go downloads automatically. For architecture notes, working agreements and the backlog, see `CLAUDE.md`, `docs/development.md` and `docs/improvements.md`.
 
 ## Keybindings
 
