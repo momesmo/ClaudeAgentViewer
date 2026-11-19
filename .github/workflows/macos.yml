@@ -1,0 +1,46 @@
+name: macOS
+
+# Informational, not a required check. Hosted macOS arm64 runners are often
+# capacity-starved ("job was not acquired by Runner of type hosted"), so this
+# lives apart from ci.yml to keep the main CI run from waiting on it.
+# Re-run it by hand from the Actions tab (workflow_dispatch) if it was cancelled.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: test (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download modules
+        run: go mod download
+      - name: Verify modules
+        run: go mod verify
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Test (race)
+        run: go test -race -count=1 ./...

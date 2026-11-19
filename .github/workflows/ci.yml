@@ -24,7 +24,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macOS runs in macos.yml: hosted macOS arm64 runners are often capacity-starved,
+        # and a job that never gets a runner would keep this whole run pending.
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
