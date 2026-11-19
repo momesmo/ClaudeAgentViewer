@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -37,12 +39,13 @@ type listItem struct {
 	projectIndex int
 	sessionIndex int
 	subagentIdx  int // index into sessionSubagents map
+	matchKind    data.MatchKind
 }
 
 type itemKind int
 
 const (
-	itemProject  itemKind = iota
+	itemProject itemKind = iota
 	itemSession
 	itemSubagent
 )
@@ -53,11 +56,11 @@ type sessionKey struct {
 }
 
 type Model struct {
-	groups    []data.ProjectGroup
-	claudeDir string
-	width     int
-	height    int
-	focus     focus
+	groups       []data.ProjectGroup
+	claudeDir    string
+	width        int
+	height       int
+	focus        focus
 	currentView  view
 	showThinking bool
 	privacyMode  bool
@@ -77,11 +80,11 @@ type Model struct {
 	// Detail pane
 	transcript   []data.SessionMessage
 	stats        data.SessionStats
-	selectedInfo *data.SessionInfo    // set when viewing a session
-	selectedSub  *data.SubagentInfo   // set when viewing a subagent
+	selectedInfo *data.SessionInfo  // set when viewing a session
+	selectedSub  *data.SubagentInfo // set when viewing a subagent
 	detailScroll int
-	loading      bool   // true while transcript loads async
-	showLogs     bool   // false = metadata view, true = transcript view
+	loading      bool // true while transcript loads async
+	showLogs     bool // false = metadata view, true = transcript view
 
 	// Confirm resume
 	confirmResume bool
@@ -97,7 +100,7 @@ type Model struct {
 	liveWatching    bool
 
 	// Flagged sessions for monitoring
-	flaggedSessions map[string]bool      // sessionID -> true
+	flaggedSessions map[string]bool              // sessionID -> true
 	flaggedStats    map[string]data.SessionStats // sessionID -> latest stats
 
 	// Dashboard
@@ -105,8 +108,29 @@ type Model struct {
 	dashboardLoading bool
 	dashboardScroll  int
 
+	// Search index (content blobs keyed by session ID)
+	searchIndex  map[string]data.IndexEntry
+	opts         Options
+	cacheDir     string
+	saveInFlight bool
+	saveDirty    bool
+
+	// Index/cache status shown in the index bar (above the key-hint bar)
+	indexJobs    int       // reindex commands started but not yet completed
+	cacheSeeded  int       // entries loaded from the disk cache at startup
+	lastSaveAt   time.Time // when the last cache save finished
+	lastSaveSize int64     // size of the cache file after the last successful save
+	lastSaveErr  string    // last save error, "" after a successful save
+
+	// Pricing refresh (opt-in; see maybeRefreshPricing)
+	pricingState  data.PricingState
+	pricingBusy   bool
+	pricingNote   string
+	pricingNoteAt time.Time
+
 	// Resume
-	ResumeSessionID string
+	ResumeSessionID  string
+	ResumeProjectDir string
 
 	err error
 }
@@ -137,13 +161,16 @@ type SubagentTranscriptLoadedMsg struct {
 	Stats    data.SessionStats
 }
 
-func NewModel(claudeDir string) Model {
+func NewModel(claudeDir string, opts Options) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Search sessions..."
 	ti.CharLimit = 100
 
 	m := Model{
 		claudeDir:        claudeDir,
+		opts:             opts,
+		searchIndex:      make(map[string]data.IndexEntry),
+		indexJobs:        1, // Init starts the first background index
 		showThinking:     false,
 		privacyMode:      true,
 		searchInput:      ti,
@@ -151,6 +178,25 @@ func NewModel(claudeDir string) Model {
 		sessionSubagents: make(map[sessionKey][]data.SubagentInfo),
 		flaggedSessions:  make(map[string]bool),
 		flaggedStats:     make(map[string]data.SessionStats),
+	}
+
+	if opts.PricingCacheDir != "" {
+		m.pricingState = data.LoadPricingState(opts.PricingCacheDir)
+	}
+
+	if opts.IndexCache {
+		m.cacheDir = opts.CacheDir
+		if m.cacheDir == "" {
+			if d, err := data.DefaultCacheDir(); err == nil {
+				m.cacheDir = d
+			} else {
+				m.opts.IndexCache = false
+			}
+		}
+		if m.opts.IndexCache {
+			m.searchIndex = data.LoadIndex(m.cacheDir, claudeDir)
+			m.cacheSeeded = len(m.searchIndex)
+		}
 	}
 
 	groups, err := data.LoadHistory(claudeDir)
@@ -173,15 +219,12 @@ func (m *Model) buildListItems(filter string) {
 	filter = strings.ToLower(filter)
 	m.listItems = nil
 	for pi, g := range m.groups {
+		kinds := make([]data.MatchKind, len(g.Sessions))
 		hasMatch := filter == ""
-		if !hasMatch {
-			for _, s := range g.Sessions {
-				if strings.Contains(strings.ToLower(s.Display), filter) ||
-					strings.Contains(strings.ToLower(s.SessionID), filter) ||
-					strings.Contains(strings.ToLower(g.Project), filter) {
-					hasMatch = true
-					break
-				}
+		for si, s := range g.Sessions {
+			kinds[si] = data.MatchSession(s, m.searchIndex[s.SessionID].Blob, filter)
+			if kinds[si] != data.MatchNone {
+				hasMatch = true
 			}
 		}
 		if !hasMatch {
@@ -190,13 +233,11 @@ func (m *Model) buildListItems(filter string) {
 
 		m.listItems = append(m.listItems, listItem{kind: itemProject, projectIndex: pi})
 		if g.Expanded {
-			for si, s := range g.Sessions {
-				if filter != "" &&
-					!strings.Contains(strings.ToLower(s.Display), filter) &&
-					!strings.Contains(strings.ToLower(s.SessionID), filter) {
+			for si := range g.Sessions {
+				if kinds[si] == data.MatchNone {
 					continue
 				}
-				m.listItems = append(m.listItems, listItem{kind: itemSession, projectIndex: pi, sessionIndex: si})
+				m.listItems = append(m.listItems, listItem{kind: itemSession, projectIndex: pi, sessionIndex: si, matchKind: kinds[si]})
 
 				// If session is expanded, show its subagents
 				sk := sessionKey{pi, si}
@@ -326,8 +367,73 @@ func loadSubagentTranscriptCmd(sa data.SubagentInfo) tea.Cmd {
 	}
 }
 
+// reindexCmd indexes all known sessions, passing the current index as prev.
+func (m Model) reindexCmd() tea.Cmd {
+	var sessions []data.SessionInfo
+	for _, g := range m.groups {
+		sessions = append(sessions, g.Sessions...)
+	}
+	return loadSearchIndexCmd(sessions, m.searchIndex)
+}
+
+// pruneUnknownIndexEntries drops index entries for sessions that are no longer
+// in history, returning how many were removed.
+func (m *Model) pruneUnknownIndexEntries() int {
+	live := make(map[string]bool)
+	for _, g := range m.groups {
+		for _, s := range g.Sessions {
+			live[s.SessionID] = true
+		}
+	}
+	n := 0
+	for id := range m.searchIndex {
+		if !live[id] {
+			delete(m.searchIndex, id)
+			n++
+		}
+	}
+	return n
+}
+
+// rebuildListKeepingCursor rebuilds the filtered list (rows can appear or
+// vanish when the index changes under an active filter) and keeps the cursor
+// on the same item. If that item is gone, the cursor is clamped into range.
+func (m *Model) rebuildListKeepingCursor() {
+	var sel *listItem
+	if m.listCursor >= 0 && m.listCursor < len(m.listItems) {
+		c := m.listItems[m.listCursor]
+		sel = &c
+	}
+	m.buildListItems(m.searchInput.Value())
+	if sel != nil {
+		for i, it := range m.listItems {
+			if it.kind == sel.kind && it.projectIndex == sel.projectIndex &&
+				it.sessionIndex == sel.sessionIndex && it.subagentIdx == sel.subagentIdx {
+				m.listCursor = i
+				m.ensureListVisible()
+				return
+			}
+		}
+	}
+	if m.listCursor >= len(m.listItems) {
+		m.listCursor = len(m.listItems) - 1
+	}
+	if m.listCursor < 0 {
+		m.listCursor = 0
+	}
+	m.ensureListVisible()
+}
+
+// startReindex starts a counted background index of all sessions. Every
+// started job is balanced by one SearchIndexLoadedMsg.
+func (m *Model) startReindex() tea.Cmd {
+	m.indexJobs++
+	return m.reindexCmd()
+}
+
 func (m Model) Init() tea.Cmd {
-	return nil // no background polling — Ctrl+R to refresh, l for live logs
+	// No polling — Ctrl+R to refresh, l for live logs. Index content in background.
+	return m.reindexCmd()
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -343,7 +449,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Path != "" {
 			m.sessionFilePath = msg.Path
 		}
-		return m, nil
+		return m, m.maybeRefreshPricing(msg.Stats)
 
 	case TranscriptLoadedMsg:
 		m.loading = false
@@ -357,11 +463,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sessionModTime = fi.ModTime()
 			}
 		}
+		priceCmd := m.maybeRefreshPricing(msg.Stats)
 		// If viewing logs, start live tailing
 		if m.liveWatching {
-			return m, watchSessionCmd(m.sessionFilePath, m.sessionModTime)
+			return m, tea.Batch(watchSessionCmd(m.sessionFilePath, m.sessionModTime), priceCmd)
 		}
-		return m, nil
+		return m, priceCmd
 
 	case SubagentTranscriptLoadedMsg:
 		m.loading = false
@@ -382,10 +489,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case SearchIndexLoadedMsg:
+		if m.indexJobs > 0 {
+			m.indexJobs--
+		}
+		if m.searchIndex == nil {
+			m.searchIndex = make(map[string]data.IndexEntry)
+		}
+		for id, e := range msg.Entries {
+			m.searchIndex[id] = e
+		}
+		dropped := 0
+		for _, id := range msg.Removed { // transcript deleted: stop matching its old text
+			if _, ok := m.searchIndex[id]; ok {
+				delete(m.searchIndex, id)
+				dropped++
+			}
+		}
+		dropped += m.pruneUnknownIndexEntries()
+		m.rebuildListKeepingCursor()
+		if m.opts.IndexCache && (len(msg.Entries) > 0 || dropped > 0) {
+			if m.saveInFlight {
+				m.saveDirty = true
+				return m, nil
+			}
+			m.saveInFlight = true
+			return m, saveIndexCmd(m.cacheDir, m.claudeDir, m.liveIndexCopy())
+		}
+		return m, nil
+
+	case IndexSaveDoneMsg:
+		m.saveInFlight = false
+		at := msg.At
+		if at.IsZero() {
+			at = time.Now()
+		}
+		m.recordSave(msg.Err, msg.Size, at)
+		if msg.Err != nil {
+			m.setStatus("Index cache save failed: " + msg.Err.Error())
+		}
+		if m.saveDirty && m.opts.IndexCache {
+			m.saveDirty = false
+			m.saveInFlight = true
+			return m, saveIndexCmd(m.cacheDir, m.claudeDir, m.liveIndexCopy())
+		}
+		return m, nil
+
+	case historyChangedMsg:
+		return m, m.startReindex()
+
 	case sessionChangedMsg:
 		// Live tailing: reload transcript when file changes
 		if m.showLogs && m.selectedInfo != nil && m.sessionFilePath == msg.path {
-			return m, loadTranscriptCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID)
+			m.indexJobs++
+			return m, tea.Batch(
+				loadTranscriptCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID),
+				loadSearchIndexCmd([]data.SessionInfo{*m.selectedInfo}, m.searchIndex),
+			)
 		}
 		// Keep watching
 		if m.liveWatching {
@@ -411,13 +571,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dashboardLoading = false
 		d := msg.Data
 		m.dashboardData = &d
+		if d.UnpricedTokens > 0 || d.CostEstimated {
+			return m, m.startPricingRefresh()
+		}
+		return m, nil
+
+	case PricingRefreshedMsg:
+		return m.handlePricingRefreshed(msg)
+
+	case ClipboardCopiedMsg:
+		if msg.Err != nil {
+			m.setStatus("Copy failed: " + truncateRunes(msg.Err.Error(), 80))
+		} else {
+			m.setStatus("Copied " + msg.What)
+		}
 		return m, nil
 
 	case FlaggedRefreshMsg:
 		// Update cached stats for flagged sessions
+		var priceCmd tea.Cmd
 		for sid, stats := range msg.Stats {
 			m.flaggedStats[sid] = stats
+			if priceCmd == nil {
+				priceCmd = m.maybeRefreshPricing(stats)
+			}
 		}
+
 		// Update the selected session's stats if it's flagged
 		if m.selectedInfo != nil && m.flaggedSessions[m.selectedInfo.SessionID] {
 			if stats, ok := msg.Stats[m.selectedInfo.SessionID]; ok {
@@ -437,9 +616,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.buildListItems(m.searchInput.Value())
 		// Schedule next refresh if we still have flagged sessions
 		if len(m.flaggedSessions) > 0 {
-			return m, scheduleNextFlaggedRefresh()
+			return m, tea.Batch(scheduleNextFlaggedRefresh(), priceCmd)
 		}
-		return m, nil
+		return m, priceCmd
 
 	case tea.KeyMsg:
 		if m.searching {
@@ -447,6 +626,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.searching = false
 				m.searchInput.Blur()
+				m.searchInput.SetValue("")
 				m.buildListItems("")
 				return m, nil
 			case "enter":
@@ -469,6 +649,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmResume = false
 				if m.selectedInfo != nil {
 					m.ResumeSessionID = m.selectedInfo.SessionID
+					m.ResumeProjectDir = m.selectedInfo.Project
 					return m, tea.Quit
 				}
 			default:
@@ -644,14 +825,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("Refreshed")
 			// Also refresh selected session stats async
 			if m.selectedInfo != nil {
-				return m, loadQuickStatsCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID)
+				return m, tea.Batch(loadQuickStatsCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID), m.startReindex())
 			}
-			return m, nil
+			return m, m.startReindex()
 
 		case key.Matches(msg, keys.Copy):
 			if m.selectedInfo != nil {
-				copyToClipboard(m.selectedInfo.SessionID)
-				m.setStatus("Copied session ID")
+				return m, copyToClipboardCmd(m.selectedInfo.SessionID, "session ID")
 			}
 			return m, nil
 
@@ -846,7 +1026,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) ensureListVisible() {
-	listHeight := m.height - 6
+	listHeight := m.height - 8
 	if listHeight < 1 {
 		listHeight = 1
 	}
@@ -882,7 +1062,10 @@ func (m Model) renderMain() string {
 	}
 	detailWidth := m.width - listWidth - 3
 
-	contentHeight := m.height - 2
+	// Pane = contentHeight + 2 border rows; plus the keys bar and the index bar.
+	// (Before the index bar existed this was height-2, which overflowed the
+	// terminal by one row and clipped the panes' top border.)
+	contentHeight := m.height - 4
 	innerHeight := contentHeight - 2
 
 	listContent := m.renderList(listWidth, innerHeight)
@@ -895,7 +1078,7 @@ func (m Model) renderMain() string {
 
 	detailBorder := lipgloss.NewStyle().
 		Width(detailWidth).Height(contentHeight).
-		MaxHeight(contentHeight + 2).
+		MaxHeight(contentHeight+2).
 		Border(lipgloss.RoundedBorder(), true, true, true, true).
 		BorderForeground(colorBorder)
 
@@ -909,7 +1092,7 @@ func (m Model) renderMain() string {
 		listBorder.Render(listContent),
 		detailBorder.Render(detailContent))
 
-	return lipgloss.JoinVertical(lipgloss.Left, main, m.renderStatusBar())
+	return lipgloss.JoinVertical(lipgloss.Left, main, m.renderIndexBar(), m.renderStatusBar())
 }
 
 func (m Model) renderList(width, height int) string {
@@ -987,14 +1170,27 @@ func (m Model) renderList(width, height int) string {
 			// Show live stats for flagged sessions
 			if m.flaggedSessions[s.SessionID] {
 				if fstats, ok := m.flaggedStats[s.SessionID]; ok {
-					badge += fmt.Sprintf(" %s $%.2f",
+					badge += fmt.Sprintf(" %s %s",
 						formatTokens(fstats.TotalInputTokens+fstats.TotalOutputTokens),
-						fstats.EstimatedCostUSD)
+						costText(fstats.EstimatedCostUSD, fstats.CostEstimated, fstats.UnpricedTokens > 0))
 				}
 			}
 
-			display := truncate(s.Display, width-24-len(badge))
+			const contentHint = " [content]"
+			maxDisp := width - 24 - len(badge)
+			if item.matchKind == data.MatchContent {
+				maxDisp -= len(contentHint) // reserve room so the row never wraps
+			}
+			display := truncate(s.Display, maxDisp)
 			line := fmt.Sprintf(" %s%s %s %s%s", flag, arrow, ts, display, badge)
+			if item.matchKind == data.MatchContent {
+				if selected {
+					// plain text: selectedStyle supplies colors; nested ANSI would reset them
+					line += contentHint
+				} else {
+					line += " " + matchHintStyle.Render("[content]")
+				}
+			}
 
 			if selected {
 				sb.WriteString(selectedStyle.Width(width - 2).Render(line))
@@ -1068,6 +1264,10 @@ func (m Model) renderDetail(width, height int) string {
 		sb.WriteString("\n\n")
 	}
 
+	if m.selectedSub == nil && m.searchInput.Value() != "" {
+		sb.WriteString(m.renderSearchMatch(width))
+	}
+
 	// Metadata dashboard (always shown)
 	if m.stats.MessageCount > 0 || m.stats.TotalOutputTokens > 0 {
 		s := m.stats
@@ -1111,7 +1311,22 @@ func (m Model) renderDetail(width, height int) string {
 
 		// Cost
 		sb.WriteString(toolLabelStyle.Render("  Cost") + "\n")
-		sb.WriteString(fmt.Sprintf("    Estimated: $%.2f\n", s.EstimatedCostUSD))
+		sb.WriteString(fmt.Sprintf("    Estimated: %s\n", costText(s.EstimatedCostUSD, s.CostEstimated, s.UnpricedTokens > 0)))
+		if len(s.ModelBreakdown) > 1 {
+			for i, mu := range s.ModelBreakdown {
+				if i >= 4 {
+					sb.WriteString(mutedStyle.Render(fmt.Sprintf("    … and %d more models", len(s.ModelBreakdown)-i)) + "\n")
+					break
+				}
+				sb.WriteString(mutedStyle.Render(fmt.Sprintf("      %-22s %s", truncate(mu.Model, 22), costText(mu.CostUSD, mu.Match == data.PriceFamily, mu.Match == data.PriceNone))) + "\n")
+			}
+		}
+		if len(s.UnpricedModels) > 0 {
+			sb.WriteString(toolLabelStyle.Render(fmt.Sprintf("    No price for %s: %s tokens not costed", strings.Join(s.UnpricedModels, ", "), formatTokens(s.UnpricedTokens))) + "\n")
+		}
+		if s.PricingAsOf != "" {
+			sb.WriteString(mutedStyle.Render("    Rates as of "+s.PricingAsOf+" (~ estimated by model family)") + "\n")
+		}
 
 		sb.WriteString("\n")
 
@@ -1218,10 +1433,11 @@ func (m Model) renderStatusBar() string {
 		bar += "  " + toolLabelStyle.Render("[PRIVACY]")
 	}
 	if m.statusMsg != "" && time.Now().Before(m.statusExpires) {
-		bar += "  " + assistantLabelStyle.Render(m.statusMsg)
+		// first, so truncation on a narrow terminal drops key hints, not the confirmation
+		bar = assistantLabelStyle.Render(m.statusMsg) + "  " + bar
 	}
 
-	return statusBarStyle.Width(m.width).Render(bar)
+	return statusBarStyle.Width(m.width).MaxHeight(1).Render(bar) // never wrap: a 2nd row overflows the terminal
 }
 
 func (m Model) renderHelp() string {
@@ -1231,13 +1447,13 @@ func (m Model) renderHelp() string {
 
 	helpItems := []struct{ key, desc string }{
 		{"↑/↓ or j/k", "Navigate tree or scroll transcript"},
-		{"→ or Enter", "Expand project/session"},
+		{"→ or Enter", "Expand project/session (sessions list their subagents)"},
 		{"←", "Collapse (or jump to parent)"},
 		{"l", "View/hide full transcript (starts live tailing)"},
 		{"f", "Flag/unflag session for monitoring (auto-refresh)"},
 		{"Tab", "Switch focus to next pane"},
 		{"Shift+Tab", "Switch focus to previous pane"},
-		{"/", "Start fuzzy search"},
+		{"/", "Search sessions (metadata and conversation content)"},
 		{"Esc", "Cancel search / Close help"},
 		{"c", "Copy session ID to clipboard"},
 		{"r", "Resume session (launches claude --resume)"},
@@ -1280,7 +1496,14 @@ func (m Model) renderDashboard() string {
 	sb.WriteString("\n\n")
 	sb.WriteString(fmt.Sprintf("    Sessions:   %d\n", d.TotalSessions))
 	sb.WriteString(fmt.Sprintf("    Tokens:     %s\n", formatTokens(d.TotalTokens)))
-	sb.WriteString(fmt.Sprintf("    Cost:       $%.2f\n", d.TotalCost))
+	sb.WriteString(fmt.Sprintf("    Cost:       %s\n", costText(d.TotalCost, d.CostEstimated, d.UnpricedTokens > 0)))
+	if d.UnpricedTokens > 0 {
+		sb.WriteString(toolLabelStyle.Render(fmt.Sprintf("                + %s tokens from models with no price (%s) are not costed",
+			formatTokens(d.UnpricedTokens), strings.Join(d.UnpricedModels, ", "))) + "\n")
+	}
+	if d.PricingAsOf != "" {
+		sb.WriteString(mutedStyle.Render("                Rates as of "+d.PricingAsOf+"; ~ = estimated by model family, + = lower bound") + "\n")
+	}
 	sb.WriteString(fmt.Sprintf("    Energy:     %.4f kWh\n", d.TotalEnergyKWh))
 	sb.WriteString(fmt.Sprintf("    CO2:        %.1f g\n", d.TotalCO2g))
 	sb.WriteString(fmt.Sprintf("    Tree-days:  %.1f\n", d.TotalTreeDays))
@@ -1298,7 +1521,7 @@ func (m Model) renderDashboard() string {
 		}
 		sb.WriteString(fmt.Sprintf("    %-30s %8d %10s %9s %7.0fg\n",
 			project, p.Sessions, formatTokens(p.Tokens),
-			fmt.Sprintf("$%.2f", p.Cost), p.CO2g))
+			costText(p.Cost, p.Estimated, p.Unpriced), p.CO2g))
 	}
 	sb.WriteString("\n")
 
@@ -1310,7 +1533,7 @@ func (m Model) renderDashboard() string {
 	for _, ms := range d.ByModel {
 		sb.WriteString(fmt.Sprintf("    %-28s %8d %10s %9s\n",
 			ms.Model, ms.Sessions, formatTokens(ms.Tokens),
-			fmt.Sprintf("$%.2f", ms.Cost)))
+			costText(ms.Cost, ms.Estimated, ms.Unpriced)))
 	}
 	sb.WriteString("\n")
 
@@ -1318,8 +1541,8 @@ func (m Model) renderDashboard() string {
 	sb.WriteString(headerStyle.Width(m.width - 4).Render("  Top Sessions by Cost"))
 	sb.WriteString("\n\n")
 	for i, s := range d.TopCost {
-		sb.WriteString(fmt.Sprintf("    %d. $%.2f  %s  %s\n",
-			i+1, s.Cost, formatTokens(s.Tokens), s.Display))
+		sb.WriteString(fmt.Sprintf("    %d. %s  %s  %s\n",
+			i+1, costText(s.Cost, s.Estimated, s.Unpriced), formatTokens(s.Tokens), s.Display))
 		sb.WriteString(mutedStyle.Render(fmt.Sprintf("       %s  %s", s.Model, truncate(s.SessionID, 36))))
 		sb.WriteString("\n")
 	}
@@ -1347,6 +1570,9 @@ func (m Model) renderDashboard() string {
 // Utilities
 
 func truncate(s string, max int) string {
+	if max < 0 {
+		max = 0 // a negative width (long badge in a narrow pane) must not panic
+	}
 	if len(s) <= max {
 		return s
 	}
@@ -1366,18 +1592,214 @@ func formatTokens(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-func copyToClipboard(text string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
+// clipboardCommand picks the platform clipboard tool. It is pure (all
+// environment access is injected) so every OS/env combination is testable.
+// The text to copy is never part of the result: callers feed it on stdin.
+func clipboardCommand(goos string, getenv func(string) string, lookPath func(string) (string, error)) (string, []string, error) {
+	have := func(name string) bool { _, err := lookPath(name); return err == nil }
+	switch goos {
 	case "windows":
-		cmd = exec.Command("cmd", "/c", "echo|set /p="+text+"|clip")
+		return "clip", nil, nil
 	case "darwin":
-		cmd = exec.Command("pbcopy")
-		cmd.Stdin = strings.NewReader(text)
-	default:
-		cmd = exec.Command("xclip", "-selection", "clipboard")
-		cmd.Stdin = strings.NewReader(text)
+		return "pbcopy", nil, nil
 	}
+	if getenv("WAYLAND_DISPLAY") != "" && have("wl-copy") {
+		return "wl-copy", nil, nil
+	}
+	if have("xclip") {
+		return "xclip", []string{"-selection", "clipboard"}, nil
+	}
+	if have("xsel") {
+		return "xsel", []string{"--clipboard", "--input"}, nil
+	}
+	return "", nil, errors.New("no clipboard tool found (install wl-clipboard, xclip or xsel)")
+}
+
+// clipboardTimeout bounds how long a clipboard tool may run. xclip, xsel and
+// wl-copy can wedge (no X server answering, a stuck selection owner), and the
+// UI must never wait on them.
+const clipboardTimeout = 3 * time.Second
+
+// ClipboardCopiedMsg reports the outcome of a background copy.
+type ClipboardCopiedMsg struct {
+	What string // what was copied, for the status line
+	Err  error
+}
+
+// newClipboardCmd builds the clipboard subprocess. The text goes ONLY on stdin:
+// it is never part of the command name or arguments, and no shell is involved.
+// WaitDelay stops a tool that forks and keeps our pipes open from holding Wait.
+func newClipboardCmd(ctx context.Context, name string, args []string, text string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = strings.NewReader(text)
 	cmd.Env = os.Environ()
-	_ = cmd.Run()
+	cmd.WaitDelay = 500 * time.Millisecond
+	return cmd
+}
+
+// runClipboardCmd runs the tool and returns a short, safe error (no tool output
+// is echoed, so nothing from stderr can reach the status line).
+func runClipboardCmd(ctx context.Context, name string, args []string, text string) error {
+	if err := newClipboardCmd(ctx, name, args, text).Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("%s timed out", name)
+		}
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// copyToClipboard writes text to the system clipboard through the platform tool.
+func copyToClipboard(ctx context.Context, text string) error {
+	name, args, err := clipboardCommand(runtime.GOOS, os.Getenv, exec.LookPath)
+	if err != nil {
+		return err
+	}
+	return runClipboardCmd(ctx, name, args, text)
+}
+
+// copyToClipboardCmd copies in the background so the UI never blocks on the tool.
+func copyToClipboardCmd(text, what string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), clipboardTimeout)
+		defer cancel()
+		return ClipboardCopiedMsg{What: what, Err: copyToClipboard(ctx, text)}
+	}
+}
+
+// IndexSaveDoneMsg reports a finished cache save (Err non-nil on failure; non-fatal).
+type IndexSaveDoneMsg struct {
+	Err  error
+	Size int64     // cache file size after a successful save
+	At   time.Time // when the save finished
+}
+
+// liveIndexCopy copies the index, dropping sessions no longer in m.groups.
+func (m Model) liveIndexCopy() map[string]data.IndexEntry {
+	live := make(map[string]bool)
+	for _, g := range m.groups {
+		for _, s := range g.Sessions {
+			live[s.SessionID] = true
+		}
+	}
+	out := make(map[string]data.IndexEntry, len(m.searchIndex))
+	for id, e := range m.searchIndex {
+		if live[id] {
+			out[id] = e
+		}
+	}
+	return out
+}
+
+// saveIndexCmd persists idx (already a private copy) off the UI goroutine.
+func saveIndexCmd(cacheDir, claudeDir string, idx map[string]data.IndexEntry) tea.Cmd {
+	return func() tea.Msg {
+		err := data.SaveIndex(cacheDir, claudeDir, idx)
+		msg := IndexSaveDoneMsg{Err: err, At: time.Now()}
+		if err == nil {
+			if fi, serr := os.Stat(data.IndexPath(cacheDir)); serr == nil {
+				msg.Size = fi.Size()
+			}
+		}
+		return msg
+	}
+}
+
+// costText formats a cost with its trust level: "~" when estimated by model
+// family, "+" when some tokens had no known price (so the figure is a lower
+// bound), and "unpriced" when nothing could be priced.
+func costText(usd float64, estimated, unpriced bool) string {
+	if usd == 0 && unpriced {
+		return "unpriced"
+	}
+	s := fmt.Sprintf("$%.2f", usd)
+	if estimated {
+		s = "~" + s
+	}
+	if unpriced {
+		s += "+"
+	}
+	return s
+}
+
+// PricingRefreshedMsg reports the result of a background price refresh.
+type PricingRefreshedMsg struct {
+	Res data.RefreshResult
+	Err error
+}
+
+const pricingCooldown = data.PricingCooldown
+
+// needsPricing reports whether a session used a model that has no exact price
+// (priced by family estimate, or not priced at all).
+func needsPricing(s data.SessionStats) bool {
+	for _, mu := range s.ModelBreakdown {
+		if mu.Match == data.PriceFamily || mu.Match == data.PriceNone {
+			return true
+		}
+	}
+	return s.UnpricedTokens > 0
+}
+
+// maybeRefreshPricing starts a background price refresh when, and only when:
+// the user opted in (PricingAuto), there is a cache directory to store the
+// result, no refresh is running, the stats include a model without an exact
+// price, and the last attempt (success or failure) is older than the cooldown.
+func (m *Model) maybeRefreshPricing(s data.SessionStats) tea.Cmd {
+	if !needsPricing(s) {
+		return nil
+	}
+	return m.startPricingRefresh()
+}
+
+func (m *Model) startPricingRefresh() tea.Cmd {
+	if !m.opts.PricingAuto || m.opts.PricingCacheDir == "" || m.pricingBusy {
+		return nil
+	}
+	now := time.Now()
+	if !m.pricingState.ShouldAttempt(now, pricingCooldown) {
+		return nil
+	}
+	m.pricingBusy = true
+	o, cacheDir, configDir := m.opts.PricingFetch, m.opts.PricingCacheDir, m.opts.PricingConfigDir
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		res, err := data.RefreshPricingVetted(ctx, cacheDir, configDir, o, now, false)
+		return PricingRefreshedMsg{Res: res, Err: err}
+	}
+}
+
+func (m *Model) setPricingNote(s string) {
+	m.pricingNote, m.pricingNoteAt = s, time.Now()
+}
+
+func (m Model) handlePricingRefreshed(msg PricingRefreshedMsg) (tea.Model, tea.Cmd) {
+	m.pricingBusy = false
+	m.pricingState = msg.Res.State
+	switch {
+	case errors.Is(msg.Err, data.ErrSuspiciousPrices):
+		m.setPricingNote("price changes need review: run claudevu --update-pricing")
+		return m, nil
+	case msg.Err != nil:
+		m.setPricingNote("price update failed")
+		m.setStatus("Price update failed: " + truncateRunes(msg.Err.Error(), 80))
+		return m, nil
+	}
+	data.SetDefaultBook(msg.Res.Book)
+	m.setPricingNote(fmt.Sprintf("prices updated (%d changed)", len(msg.Res.Changes)))
+	// Costs already on screen were computed with the old table: recompute them.
+	m.dashboardData = nil
+	var cmds []tea.Cmd
+	if m.selectedInfo != nil {
+		cmds = append(cmds, loadQuickStatsCmd(m.claudeDir, m.selectedInfo.Project, m.selectedInfo.SessionID))
+	}
+	if len(m.flaggedSessions) > 0 {
+		cmds = append(cmds, refreshFlaggedCmd(m.claudeDir, m.flaggedSessions, m.groups))
+	}
+	if m.currentView == viewDashboard {
+		m.dashboardLoading = true
+		cmds = append(cmds, loadDashboardCmd(m.claudeDir, m.groups))
+	}
+	return m, tea.Batch(cmds...)
 }

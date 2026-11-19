@@ -79,7 +79,8 @@ A blazing-fast terminal UI for browsing, searching, and monitoring your Claude C
 - **Live log tailing** (`l`) — stream transcript in real-time for active sessions
 - **Async everything** — all loading happens in background, UI never blocks
 - **Privacy mode** — auto-redacts API keys, tokens, and secrets (on by default)
-- **Fuzzy search** — filter sessions by prompt text, session ID, or project path
+- **Search** (`/`) — case-insensitive substring filter over prompt text, session ID, project path, agent name/title, and conversation content (prompts, assistant replies, tool names, git branch, model; matches found only in content are tagged `[content]`). Content is indexed in the background, so metadata matches work instantly and content matches appear as indexing finishes. While a filter is active, the detail pane shows why the selected session matched: which fields (prompt, session ID, project, agent name, title), how many content matches, and up to three snippets with the match highlighted (snippets are lowercased). Sessions whose transcript is deleted stop matching on their old text, and the cursor stays on the same row when matches arrive.
+- **Index status bar** — a line just above the key hints shows whether the disk cache is on (and where it lives, how many entries were loaded from it), index progress (`indexing…` / `ready`, sessions indexed, index size), the last cache save (time, file size, or failure), and the active search filter with its result count. On narrow terminals it shortens itself instead of wrapping.
 - **Session resume** — press `r` to launch `claude --resume <id>` directly
 - **State preservation** — `Ctrl+R` refresh keeps your expanded folders, cursor, and flags
 
@@ -92,7 +93,33 @@ go build -o claudevu.exe .
 ./claudevu.exe
 ```
 
-Requires Go 1.22+.
+Requires Go 1.26+ (see `go.mod`).
+
+## Index cache (opt-in)
+
+By default the content search index is built in memory only. To persist it between runs:
+
+- `--index-cache` (or `CLAUDEVU_INDEX_CACHE=1`/`true`) enables the cache; `--index-cache=false` overrides the env var.
+- `--cache-dir <path>` overrides the location (default: `<user cache dir>/claudevu`).
+- `--clear-cache` deletes the cache file and exits.
+
+### Privacy: what the cache stores and what redaction does (and doesn't) do
+
+- The cache stores **lowercased text from your prompts and assistant replies** (plus tool names, git branch and model), capped at 256 KB per session (the first 64 KB of a session plus its most recent text; only the middle of a very long session is dropped). Branch and model names are written only when they change. A pasted prompt larger than 1 MiB is kept partially (its first part) rather than skipped. It does not store tool inputs, tool results, thinking blocks or subagent transcripts.
+- The file is written with mode 0600 and never under `~/.claude/`. `--clear-cache` removes it, including leftover temp files.
+- **Secrets are redacted before anything is written, but redaction is best-effort pattern matching, not a guarantee.** It covers common formats: Anthropic/OpenAI/GitHub/AWS/Google/Stripe/SendGrid/Hugging Face/npm/Slack tokens, JWTs, PEM private keys, `Authorization: Bearer ...`, passwords in URLs, and `password=`/`token:`/`api_key=`-style assignments (values of 8+ characters). It does **not** catch unknown token formats, short or unlabeled passwords, or secrets split across a truncation point. Don't treat the cache as safe to share; delete it with `--clear-cache` if in doubt.
+- The same rules power Privacy mode (`p`) in the transcript view, so the same limits apply there.
+- Redaction applies to the saved copy only. In the live session you can still search for a secret you pasted. After a restart with the cache enabled, that secret is `[REDACTED]` in the loaded cache and won't match until its session file changes (or you run `--clear-cache`).
+
+## Development
+
+```bash
+go vet ./... && go test -race -count=1 ./...     # the tests use a fixture and never touch your real ~/.claude
+gofmt -l $(git ls-files '*.go')                  # must print nothing (CI checks it)
+go run . --version                               # the only other flag not covered above
+```
+
+CI (`.github/workflows/ci.yml`) runs the same checks on Linux and Windows, cross-builds six targets, tests the minimum Go version, runs `staticcheck` and `govulncheck`, and checks that `go.mod` is tidy. macOS tests run in a separate workflow (`macos.yml`). `go.mod` pins a patched Go toolchain, which Go downloads automatically. For architecture notes, working agreements and the backlog, see `CLAUDE.md`, `docs/development.md` and `docs/improvements.md`.
 
 ## Keybindings
 
@@ -105,7 +132,7 @@ Requires Go 1.22+.
 | `f` | Flag/unflag session for live monitoring |
 | `d` | Usage dashboard (aggregated stats across all sessions) |
 | `Tab` / `Shift+Tab` | Switch between tree and detail panes |
-| `/` | Fuzzy search sessions |
+| `/` | Search sessions (prompt text, ID, project, agent name/title, and conversation content) |
 | `c` | Copy session ID to clipboard |
 | `r` | Resume session (`claude --resume`) |
 | `t` | Toggle thinking block visibility |
@@ -123,17 +150,33 @@ claudevu reads Claude Code's local session data:
 - `~/.claude/projects/[project]/[sessionId].jsonl` — full transcripts
 - `~/.claude/projects/[project]/[sessionId]/subagents/` — subagent data
 
-No data leaves your machine. Everything is read-only.
+No data leaves your machine, and claudevu never sends anything about your sessions. Everything is read-only, with two opt-in exceptions: the search index cache (see "Index cache (opt-in)" above) and a price refresh (see "Pricing" below), which is the only thing that uses the network and only when you ask for it.
+
+### Pricing
+
+Costs come from a price table built from Anthropic's published rates (embedded in the binary, dated in the status bar and on the dashboard). The table is applied per API message, so mixed-model sessions are costed correctly. Cache writes are split into 5-minute and 1-hour rates, fast mode and US-only inference multipliers are applied, and each message is counted once even though Claude Code logs it as several lines.
+
+- A `~` before a cost means some model was priced by family because its exact version isn't in the table; a `+` means some tokens belong to a model with **no known price** and are not included (the detail pane names it).
+- `claudevu --update-pricing` fetches the current prices once (the only network use), shows what changed, and exits. Large price swings are refused until you review them and pass `--accept-price-changes`.
+- `--pricing-auto` / `CLAUDEVU_PRICING_AUTO=1` opts in to a background refresh, at most once a day, when a model without an exact price shows up.
+- `--pricing-source <https URL>` uses a different pricing page (trusted only for its own host). `--accept-price-changes` applies a refresh that moves prices by more than 3x after you have reviewed it with `--update-pricing`.
+- You can override or add prices in `<user config dir>/claudevu/pricing-overrides.json` (on macOS: `~/Library/Application Support/claudevu/`).
+- `claudevu --pricing-info` explains where every price comes from, lists any problems (with fixes), shows the refresh policy and how each model in your sessions is priced. It is read-only and offline.
+
+Details, safety rules and file formats: [docs/pricing.md](docs/pricing.md).
 
 ### Cost Calculation
 
-Costs are calculated using Anthropic's published per-model rates:
+Rates are USD per million tokens, as published by Anthropic (see `internal/data/pricing_table.json` for the full table and its date). Examples of the current rates:
 
-| Model | Input/1M | Output/1M | Cache Write/1M | Cache Read/1M |
-|-------|----------|-----------|-----------------|---------------|
-| Opus 4.6 | $15.00 | $75.00 | $18.75 | $1.50 |
-| Sonnet 4.6 | $3.00 | $15.00 | $3.75 | $0.30 |
-| Haiku 4.5 | $0.80 | $4.00 | $1.00 | $0.08 |
+| Model | Input/1M | Output/1M | Cache Write 5m/1M | Cache Write 1h/1M | Cache Read/1M |
+|-------|----------|-----------|-------------------|-------------------|---------------|
+| Opus 5.5 | $4.00 | $20.00 | $5.00 | $8.00 | $0.20 |
+| Opus 4.8 | $5.00 | $25.00 | $6.25 | $10.00 | $0.50 |
+| Sonnet 5.5 | $2.00 | $10.00 | $2.50 | $4.00 | $0.10 |
+| Haiku 5.5 (prompts up to 100K tokens) | $0.10 | $0.50 | $0.125 | $0.20 | $0.01 |
+
+Cache-read prices are not a flat share of input: they range from 0.025x to 0.1x depending on the model.
 
 ### Environment Metrics
 
@@ -154,7 +197,7 @@ Energy and CO2 estimates use the following methodology:
 
 | Layer | Tool |
 |-------|------|
-| Language | Go 1.22+ |
+| Language | Go 1.26+ |
 | TUI | [Bubble Tea](https://github.com/charmbracelet/bubbletea) (Charm ecosystem) |
 | Styling | [Lip Gloss](https://github.com/charmbracelet/lipgloss) |
 

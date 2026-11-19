@@ -1,0 +1,9 @@
+* text=auto eol=lf
+*.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.yml text eol=lf
+*.jsonl text eol=lf
+*.exe binary
+*.png binary
+*.gif binary

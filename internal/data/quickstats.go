@@ -1,7 +1,6 @@
 package data
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"strings"
@@ -9,21 +8,52 @@ import (
 
 // QuickStats reads token usage from a session JSONL without full message parsing.
 // Only scans for "usage" fields in assistant messages — much faster than LoadTranscript.
-type quickUsage struct {
-	InputTokens         int `json:"input_tokens"`
-	OutputTokens        int `json:"output_tokens"`
-	CacheReadTokens     int `json:"cache_read_input_tokens"`
-	CacheCreationTokens int `json:"cache_creation_input_tokens"`
-}
-
 type quickMessage struct {
-	Model string     `json:"model"`
-	Usage quickUsage `json:"usage"`
+	ID    string   `json:"id"`
+	Model string   `json:"model"`
+	Usage rawUsage `json:"usage"`
 }
 
 type quickLine struct {
 	Type    string       `json:"type"`
 	Message quickMessage `json:"message"`
+}
+
+type metaLine struct {
+	Type        string `json:"type"`
+	AgentName   string `json:"agentName"`
+	CustomTitle string `json:"customTitle"`
+}
+
+// ScanSessionMeta reads the first occurrence of agentName and customTitle from a session file.
+func ScanSessionMeta(path string) (agentName, customTitle string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := newLineScanner(f, maxLineBytes)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if agentName != "" && customTitle != "" {
+			break
+		}
+		if !strings.Contains(string(line), `"agent-name"`) && !strings.Contains(string(line), `"custom-title"`) {
+			continue
+		}
+		var ml metaLine
+		if err := json.Unmarshal(line, &ml); err != nil {
+			continue
+		}
+		if ml.Type == "agent-name" && agentName == "" {
+			agentName = ml.AgentName
+		}
+		if ml.Type == "custom-title" && customTitle == "" {
+			customTitle = ml.CustomTitle
+		}
+	}
+	return
 }
 
 // QuickScanStats reads just token counts and message count from a session file.
@@ -36,10 +66,9 @@ func QuickScanStats(path string) (SessionStats, error) {
 	defer f.Close()
 
 	stats := SessionStats{ToolsUsed: make(map[string]int)}
-	modelSet := make(map[string]bool)
+	tally := NewUsageTally(DefaultBook())
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+	scanner := newLineScanner(f, maxStatsLineBytes)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -49,10 +78,6 @@ func QuickScanStats(path string) (SessionStats, error) {
 			// Count user messages
 			if strings.Contains(string(line), `"type":"user"`) {
 				stats.MessageCount++
-			}
-			// Count tool uses
-			if strings.Contains(string(line), `"tool_use"`) {
-				stats.ToolCallCount++
 			}
 			continue
 		}
@@ -67,28 +92,12 @@ func QuickScanStats(path string) (SessionStats, error) {
 		}
 
 		stats.MessageCount++
-		stats.TotalInputTokens += ql.Message.Usage.InputTokens
-		stats.TotalOutputTokens += ql.Message.Usage.OutputTokens
-		stats.CacheWriteTokens += ql.Message.Usage.CacheCreationTokens
-		stats.CacheReadTokens += ql.Message.Usage.CacheReadTokens
-
-		if ql.Message.Model != "" {
-			modelSet[ql.Message.Model] = true
-		}
+		// one content block per line, so this counts each tool call once
+		stats.ToolCallCount += strings.Count(string(line), `"type":"tool_use"`)
+		tally.Add(ql.Message.ID, ql.Message.Usage.usage(ql.Message.Model))
 	}
 
-	for model := range modelSet {
-		stats.Models = append(stats.Models, model)
-	}
-
-	// Cost estimation using accurate per-model pricing
-	model := ""
-	if len(stats.Models) > 0 {
-		model = stats.Models[0]
-	}
-	stats.EstimatedCostUSD = ComputeCost(
-		stats.TotalInputTokens, stats.TotalOutputTokens,
-		stats.CacheWriteTokens, stats.CacheReadTokens, model)
+	tally.Apply(&stats) // each API message counted once, priced per model
 
 	// Energy metrics
 	stats.ComputeEnergy()
